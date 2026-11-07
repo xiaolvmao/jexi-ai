@@ -30,7 +30,7 @@
 @property (nonatomic, strong) UITextField *radiusField;
 @property (nonatomic, strong) UILabel *locationLabel;
 @property (nonatomic, strong) UISegmentedControl *formatControl;
-@property (nonatomic, strong) UISwitch *nameSwitch;
+@property (nonatomic, strong) UITextField *nameField;
 @property (nonatomic, strong) UIButton *runButton;
 @property (nonatomic, strong) UIProgressView *progressView;
 @property (nonatomic, strong) UILabel *statusLabel;
@@ -41,22 +41,12 @@
 @property (nonatomic, strong) UILabel *summaryLabel;
 @property (nonatomic, strong) CLLocation *batchLocation;
 @property (nonatomic, strong) UIButton *rerollButton;
+@property (nonatomic, assign) BOOL autoLocated;
 @property (nonatomic, strong) CLLocationManager *manager;
 @property (nonatomic, strong) CLLocation *location;
 @property (nonatomic, assign) BOOL running;
 @property (nonatomic, assign) BOOL locating;
 @end
-
-static NSString *JXHashedName(NSURL *url, NSString *ext)
-{
-    NSData *data = [NSData dataWithContentsOfURL:url options:NSDataReadingMappedIfSafe error:NULL];
-    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
-    if (data.length == 0) return [NSString stringWithFormat:@"IMG_jexi.%@", ext];
-    CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
-    NSMutableString *hex = [NSMutableString stringWithString:@"IMG_"];
-    for (int i = 0; i < 4; i++) [hex appendFormat:@"%02X", digest[i]];
-    return [NSString stringWithFormat:@"%@.%@", hex, ext];
-}
 
 @implementation JXMetaViewController
 
@@ -118,11 +108,30 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
+- (void)viewDidAppear:(BOOL)animated
+{
+    [super viewDidAppear:animated];
+    if (self.autoLocated) return;
+    self.autoLocated = YES;
+    // 进页面就把位置拿到，用户选「当前定位」时不用再点一次
+    if (self.locationControl.selectedSegmentIndex != 0) {
+        self.locationLabel.text = @"正在定位…";
+        [self startLocating];
+    }
+}
+
 #pragma mark - keyboard
 
 - (UITextField *)activeTextField
 {
+    if (self.nameField.isFirstResponder) return self.nameField;
+    if (self.radiusField.isFirstResponder) return self.radiusField;
     return nil;
+}
+
+- (void)dismissKeyboard
+{
+    [self.view endEditing:YES];
 }
 
 - (void)keyboardWillChange:(NSNotification *)notification
@@ -299,7 +308,7 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     [self.radiusField.heightAnchor constraintEqualToConstant:40].active = YES;
     [self.radiusField addTarget:self action:@selector(radiusTextChanged) forControlEvents:UIControlEventEditingChanged];
     [self.stack addArrangedSubview:self.radiusField];
-    self.locationLabel = [self caption:@"点「当前定位」授权后读取一次位置"];
+    self.locationLabel = [self caption:@"读取定位中…"];
     [self.stack addArrangedSubview:self.locationLabel];
     self.rerollButton = [self pill:@"换一个位置" filled:NO];
     self.rerollButton.hidden = YES;
@@ -320,10 +329,17 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
 
     // 文件名
     [self.stack addArrangedSubview:[self sectionTitle:@"文件名"]];
-    self.nameSwitch = [UISwitch new];
-    self.nameSwitch.on = YES;              // 默认按相机规则命名
-    [self.stack addArrangedSubview:[self labelledRow:@"按相机规则命名（IMG_0000）" control:self.nameSwitch]];
-    [self.stack addArrangedSubview:[self caption:@"打开时用相册里下一个 IMG_ 编号；关闭时用 IMG_ + 内容 hash"]];
+    self.nameField = [UITextField new];
+    self.nameField.placeholder = @"留空则按相机规则命名（IMG_0000）";
+    self.nameField.textColor = [UIColor whiteColor];
+    self.nameField.font = [UIFont systemFontOfSize:15];
+    self.nameField.borderStyle = UITextBorderStyleRoundedRect;
+    self.nameField.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
+    self.nameField.delegate = self;
+    self.nameField.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.nameField.heightAnchor constraintEqualToConstant:40].active = YES;
+    [self.nameField addTarget:self action:@selector(dismissKeyboard) forControlEvents:UIControlEventEditingDidEndOnExit];
+    [self.stack addArrangedSubview:self.nameField];
 
     // 运行
     self.runButton = [self pill:@"超分并保存到相册" filled:YES];
@@ -459,8 +475,12 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
         self.location = nil;
         return;
     }
-    self.locationLabel.text = @"正在定位…";
-    [self startLocating];
+    if (self.location) {
+        [self updateLocationLabel];
+    } else {
+        self.locationLabel.text = @"正在定位…";
+        [self startLocating];
+    }
 }
 
 - (void)radiusChanged
@@ -611,7 +631,8 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     CLLocation *location = [self effectiveLocation];
     NSDate *baseDate = self.timeControl.selectedSegmentIndex == 2 ? self.datePicker.date
                                                                   : [NSDate date];
-    BOOL cameraNames = self.nameSwitch.isOn;
+    NSString *baseName = [self.nameField.text stringByTrimmingCharactersInSet:
+                                                    [NSCharacterSet whitespaceCharacterSet]];
 
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
@@ -683,9 +704,15 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
 
                 NSString *ext = format == EXOutputFormatHEIF ? @"heic"
                               : (format == EXOutputFormatJPEG ? @"jpg" : src.pathExtension);
-                NSString *filename = cameraNames
-                    ? JXCameraStyleFilename(ext, index)
-                    : JXHashedName(src, ext);
+                NSString *filename = nil;
+                if (baseName.length > 0) {
+                    filename = (total > 1)
+                        ? [NSString stringWithFormat:@"%@-%lu.%@", baseName,
+                                                     (unsigned long)(index + 1), ext]
+                        : [NSString stringWithFormat:@"%@.%@", baseName, ext];
+                } else {
+                    filename = JXCameraStyleFilename(ext, index);
+                }
 
                 // 像素先落成临时文件，再让 EXMetadata 按选项写元数据与格式
                 NSString *token = [[NSUUID UUID] UUIDString];
