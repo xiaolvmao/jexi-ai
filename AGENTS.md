@@ -144,6 +144,10 @@ cd .. && ./Tools/selftest Models/FastSRGAN.mlmodel Models/RealESRGAN4x.mlmodel -
 
 ## 踩过的坑
 
+- 键盘遮挡输入框：照 jexi（Melon）的做法——监听 `UIKeyboardWillChangeFrameNotification`，
+  用键盘与 `view.bounds` 的重叠量设 `scrollView.contentInset.bottom`，再 `scrollRectToVisible:`
+  把正在编辑的输入框滚进来（延迟 0.35 s 再滚一次）；`UIKeyboardWillHideNotification` 里不清零，
+  而是留出「刚好够当前滚动偏移」的 inset，否则偏移被夹回去、画面整体上移。
 - 工具链接完必须 `ldid -STool.entitlements`（含 IOKit user client 类），否则
   Core ML 在 GPU/ANE 上起不来或进程直接被杀。
 - `sysctl`/`/tmp` 在两个世界里不是同一个目录：工具看到的 `/tmp` 与 shell 的不是一处。

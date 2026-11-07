@@ -98,6 +98,65 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     ]];
 
     [self buildUI];
+
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(keyboardWillChange:)
+                                                 name:UIKeyboardWillChangeFrameNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(keyboardWillHide:)
+                                                 name:UIKeyboardWillHideNotification
+                                               object:nil];
+}
+
+- (void)dealloc
+{
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
+#pragma mark - keyboard
+
+- (UITextField *)activeTextField
+{
+    if (self.nameField.isFirstResponder) return self.nameField;
+    if (self.radiusField.isFirstResponder) return self.radiusField;
+    return nil;
+}
+
+- (void)keyboardWillChange:(NSNotification *)notification
+{
+    CGRect endFrame = [notification.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    CGRect frameInView = [self.view convertRect:endFrame fromView:nil];
+    CGFloat overlap = MAX(0.0, CGRectGetMaxY(self.view.bounds) - CGRectGetMinY(frameInView));
+    // 收起键盘时这个通知也会来一帧，交给 keyboardWillHide 处理
+    if (overlap <= 0.5) return;
+    self.scroll.contentInset = UIEdgeInsetsMake(0, 0, overlap, 0);
+    self.scroll.verticalScrollIndicatorInsets = UIEdgeInsetsMake(0, 0, overlap, 0);
+    [self scrollActiveFieldIntoView];
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf scrollActiveFieldIntoView];
+    });
+}
+
+- (void)keyboardWillHide:(NSNotification *)notification
+{
+    // 收起后留出刚好够当前偏移的底部内边距，否则滚动偏移被夹回去，画面整体上移
+    UIScrollView *scrollView = self.scroll;
+    CGFloat offset = scrollView.contentOffset.y;
+    CGFloat needed = MAX(0.0, offset + scrollView.bounds.size.height - scrollView.contentSize.height);
+    scrollView.contentInset = UIEdgeInsetsMake(0, 0, needed, 0);
+    scrollView.verticalScrollIndicatorInsets = UIEdgeInsetsMake(0, 0, needed, 0);
+}
+
+- (void)scrollActiveFieldIntoView
+{
+    UITextField *field = [self activeTextField];
+    if (!field) return;
+    CGRect rect = [field convertRect:field.bounds toView:self.scroll];
+    rect = CGRectInset(rect, 0, -28);
+    [self.scroll scrollRectToVisible:rect animated:YES];
 }
 
 - (UIStatusBarStyle)preferredStatusBarStyle
@@ -253,6 +312,7 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     // 文件名
     [self.stack addArrangedSubview:[self sectionTitle:@"文件名"]];
     self.nameSwitch = [UISwitch new];
+    self.nameSwitch.on = YES;              // 自定义文件名默认打开
     [self.stack addArrangedSubview:[self labelledRow:@"自定义文件名" control:self.nameSwitch]];
     self.nameField = [UITextField new];
     self.nameField.placeholder = @"留空则 IMG_ + 图片 hash";
@@ -261,7 +321,7 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     self.nameField.borderStyle = UITextBorderStyleRoundedRect;
     self.nameField.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
     self.nameField.delegate = self;
-    self.nameField.hidden = YES;
+    self.nameField.hidden = NO;
     self.nameField.translatesAutoresizingMaskIntoConstraints = NO;
     [self.nameField.heightAnchor constraintEqualToConstant:40].active = YES;
     [self.nameField addTarget:self action:@selector(dismissKeyboard) forControlEvents:UIControlEventEditingDidEndOnExit];
