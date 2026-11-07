@@ -90,8 +90,8 @@ Section: Applications
 Priority: optional
 Depends: firmware (>= 16.0)
 Description: 本地 AI 照片超分
- jexi-ai 用 Core ML 把一张照片放大 4 倍，全部在设备上完成，不上传任何东西。
- 照片经 PHPicker 选取，分块推理，可预览原图对比，结果另存为新照片。
+ jexi-ai 用 Core ML 把照片放大 4 倍，全部在设备上完成，不上传任何东西。
+ 照片经 PHPicker 选取，分块推理，结果按相机口径另存为新照片（默认 HEIF）。
  .
  内置模型
   · Real-ESRGAN 4x —— 原项目 xinntao/Real-ESRGAN，BSD-3-Clause 许可
