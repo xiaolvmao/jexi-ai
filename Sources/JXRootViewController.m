@@ -8,16 +8,13 @@
 #import "JXUpscaler.h"
 #import "JXModelCatalog.h"
 #import "JXImageIO.h"
-#import <PhotosUI/PhotosUI.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 static const long long kMaxOutputEdge = 4096;
 
-@interface JXRootViewController () <PHPickerViewControllerDelegate,
-                                    UIDocumentPickerDelegate>
+@interface JXRootViewController () <UIDocumentPickerDelegate>
 @property (nonatomic, strong) UIImageView *photoView;
 @property (nonatomic, strong) UILabel *placeholderLabel;
-@property (nonatomic, strong) UIButton *pickButton;
 @property (nonatomic, strong) UISegmentedControl *modelControl;
 @property (nonatomic, strong) UILabel *modelDetailLabel;
 @property (nonatomic, strong) UILabel *capNoticeLabel;
@@ -39,15 +36,35 @@ static const long long kMaxOutputEdge = 4096;
 
 #pragma mark - lifecycle
 
+- (instancetype)initWithImageData:(NSData *)data
+                       properties:(NSDictionary *)properties
+                          preview:(UIImage *)preview
+{
+    self = [super initWithNibName:nil bundle:nil];
+    if (self) {
+        _sourceData = data;
+        _sourceProperties = properties;
+        _sourcePreview = preview;
+    }
+    return self;
+}
+
 - (void)viewDidLoad
 {
     [super viewDidLoad];
-    self.title = @"jexi-ai";
+    self.title = @"超分";
     self.view.backgroundColor = [UIColor colorWithRed:0.04 green:0.05 blue:0.07 alpha:1];
     self.navigationController.navigationBar.translucent = YES;
+    self.navigationItem.backButtonDisplayMode = UINavigationItemBackButtonDisplayModeMinimal;
     [self buildUI];
     [self refreshModelDetail];
     [self setRunningUI:NO];
+
+    if (self.sourcePreview) {
+        self.photoView.image = self.sourcePreview;
+        self.placeholderLabel.hidden = YES;
+        [self showSourceSummary];
+    }
 }
 
 - (UIStatusBarStyle)preferredStatusBarStyle
@@ -133,10 +150,6 @@ static const long long kMaxOutputEdge = 4096;
         [self.placeholderLabel.centerXAnchor constraintEqualToAnchor:card.centerXAnchor],
         [self.placeholderLabel.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
     ]];
-
-    self.pickButton = [self pillButtonWithTitle:@"选择照片" filled:NO];
-    [self.pickButton addTarget:self action:@selector(pickPhoto) forControlEvents:UIControlEventTouchUpInside];
-    [stack addArrangedSubview:self.pickButton];
 
     UILabel *modelTitle = [self labelWithText:@"模型"
                                          font:[UIFont systemFontOfSize:13 weight:UIFontWeightSemibold]
@@ -233,7 +246,6 @@ static const long long kMaxOutputEdge = 4096;
     if (self.kind == JXModelKindUser && ![JXModelCatalog shared].userModelURL) ready = NO;
     self.runButton.enabled = ready;
     self.runButton.alpha = ready ? 1.0 : 0.4;
-    self.pickButton.enabled = !self.running;
 }
 
 - (void)setRunningUI:(BOOL)running
@@ -241,7 +253,6 @@ static const long long kMaxOutputEdge = 4096;
     self.running = running;
     self.progressStack.hidden = !running;
     self.modelControl.enabled = !running;
-    self.pickButton.enabled = !running;
     [self updateRunButton];
 }
 
@@ -259,50 +270,7 @@ static const long long kMaxOutputEdge = 4096;
     }
 }
 
-#pragma mark - picking
-
-- (void)pickPhoto
-{
-    PHPickerConfiguration *cfg = [[PHPickerConfiguration alloc] init];
-    cfg.filter = [PHPickerFilter imagesFilter];
-    cfg.selectionLimit = 1;
-    cfg.preferredAssetRepresentationMode = PHPickerConfigurationAssetRepresentationModeCurrent;
-    PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:cfg];
-    picker.delegate = self;
-    [self presentViewController:picker animated:YES completion:nil];
-}
-
-- (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results
-{
-    [picker dismissViewControllerAnimated:YES completion:nil];
-    if (results.count == 0) return;
-    NSItemProvider *provider = results.firstObject.itemProvider;
-    NSString *type = UTTypeImage.identifier;
-    if (![provider hasItemConformingToTypeIdentifier:type]) {
-        type = provider.registeredTypeIdentifiers.firstObject;
-    }
-    if (!type) return;
-    __weak typeof(self) weakSelf = self;
-    [provider loadDataRepresentationForTypeIdentifier:type
-                                   completionHandler:^(NSData *data, NSError *error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            typeof(self) self = weakSelf;
-            if (!self) return;
-            if (!data) {
-                [self alertWithTitle:@"读不到这张照片" message:error.localizedDescription];
-                return;
-            }
-            self.sourceData = data;
-            self.sourceProperties = JXImagePropertiesFromData(data);
-            UIImage *image = [UIImage imageWithData:data scale:1.0];
-            self.sourcePreview = image;
-            self.photoView.image = image;
-            self.placeholderLabel.hidden = YES;
-            [self showSourceSummary];
-            [self updateRunButton];
-        });
-    }];
-}
+#pragma mark - source summary
 
 - (void)showSourceSummary
 {

@@ -23,6 +23,10 @@ UIImage *_Nullable JXImageFromPixelBuffer(CVPixelBufferRef buffer);
 /// result carries the same time, camera and location.
 NSDictionary *_Nullable JXImagePropertiesFromData(NSData *data);
 
+/// Appends one line to /var/mobile/jexi-ai-debug.log (the app runs without a
+/// sandbox, so a fixed path is easy to read from a shell afterwards).
+void JXNote(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
+
 /// Writes the picture as a JPEG that keeps the original's metadata but drops the
 /// orientation flag (the pixels are already upright) and states the new size,
 /// then adds it to the photo library as a NEW asset.  Requests add-only access

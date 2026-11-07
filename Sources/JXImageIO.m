@@ -8,12 +8,41 @@
 #import <ImageIO/ImageIO.h>
 #import <Photos/Photos.h>
 #import <MobileCoreServices/MobileCoreServices.h>
+#import <os/log.h>
+
+static os_log_t JXSaveLog(void)
+{
+    static os_log_t log = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ log = os_log_create("com.liu.jexiai", "save"); });
+    return log;
+}
 
 static NSError *JXIOError(NSString *message)
 {
     return [NSError errorWithDomain:@"JXImageIOErrorDomain"
                                code:1
                            userInfo:@{NSLocalizedDescriptionKey : message ?: @"error"}];
+}
+
+void JXNote(NSString *format, ...)
+{
+    va_list ap;
+    va_start(ap, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:ap];
+    va_end(ap);
+    NSDateFormatter *df = [NSDateFormatter new];
+    df.dateFormat = @"HH:mm:ss.SSS";
+    NSString *line = [NSString stringWithFormat:@"%@ %@\n", [df stringFromDate:[NSDate date]],
+                                                message];
+    NSString *path = @"/var/mobile/jexi-ai-debug.log";
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (![fm fileExistsAtPath:path]) [fm createFileAtPath:path contents:nil attributes:nil];
+    NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:path];
+    [fh seekToEndOfFile];
+    [fh writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+    [fh closeFile];
+    os_log(JXSaveLog(), "%{public}@", message);
 }
 
 CVPixelBufferRef JXCreatePixelBufferFromImageData(NSData *data, UIImage **outPreview,
@@ -139,6 +168,17 @@ static BOOL JXWriteJPEG(UIImage *image, NSDictionary *originalProperties, NSStri
     }
     size_t w = CGImageGetWidth(cg), h = CGImageGetHeight(cg);
     NSDictionary *props = JXMetadataForUprightImage(originalProperties, w, h);
+    os_log(JXSaveLog(), "writing %zux%zu jpeg, source keys=%{public}lu exif=%{public}d gps=%{public}d",
+           w, h, (unsigned long)originalProperties.count,
+           props[(id)kCGImagePropertyExifDictionary] != nil,
+           props[(id)kCGImagePropertyGPSDictionary] != nil);
+    JXNote(@"save: %zux%zu, source keys=%lu exif=%lu tiff=%lu gps=%lu -> exif=%lu gps=%lu",
+           w, h, (unsigned long)originalProperties.count,
+           (unsigned long)[originalProperties[(id)kCGImagePropertyExifDictionary] count],
+           (unsigned long)[originalProperties[(id)kCGImagePropertyTIFFDictionary] count],
+           (unsigned long)[originalProperties[(id)kCGImagePropertyGPSDictionary] count],
+           (unsigned long)[props[(id)kCGImagePropertyExifDictionary] count],
+           (unsigned long)[props[(id)kCGImagePropertyGPSDictionary] count]);
     NSURL *url = [NSURL fileURLWithPath:path];
     CGImageDestinationRef dst = CGImageDestinationCreateWithURL((__bridge CFURLRef)url,
                                                                 CFSTR("public.jpeg"), 1, NULL);

@@ -4,7 +4,7 @@
 //
 
 #import "JXAppDelegate.h"
-#import "JXRootViewController.h"
+#import "JXPickViewController.h"
 #import "JXModelCatalog.h"
 
 @implementation JXAppDelegate
@@ -13,7 +13,7 @@
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
 {
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-    JXRootViewController *root = [JXRootViewController new];
+    JXPickViewController *root = [JXPickViewController new];
     UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:root];
     nav.navigationBar.tintColor = [UIColor colorWithRed:0.29 green:0.67 blue:1 alpha:1];
     nav.navigationBar.titleTextAttributes = @{NSForegroundColorAttributeName : [UIColor whiteColor]};

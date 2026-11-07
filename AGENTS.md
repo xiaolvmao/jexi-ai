@@ -88,7 +88,8 @@ App 重装后要先 `icli app kill --force com.liu.jexiai` 再启动，否则跑
 ```
 Sources/main.m                  入口
 Sources/JXAppDelegate.{h,m}     窗口；进后台时释放模型，归还 ANE/GPU 工作集
-Sources/JXRootViewController    选照片(PHPicker)/选模型/进度/取消，推预览
+Sources/JXPickViewController    第一页：选图（PHPicker）→ 带着照片推第二页
+Sources/JXRootViewController    第二页：选模型/进度/取消，推预览
 Sources/JXPreviewViewController 结果与原图对比、缩放、保存
 Sources/JXModelCatalog.{h,m}    内置模型、编译缓存、用户自备模型导入
 Sources/JXImageIO.{h,m}         解码+方向归一成 BGRA、BGRA→UIImage、带 EXIF 存相册
