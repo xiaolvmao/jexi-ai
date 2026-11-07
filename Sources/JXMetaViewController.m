@@ -10,10 +10,11 @@
 #import "EXMetadata.h"
 #import "JXImageIO.h"
 #import <CoreLocation/CoreLocation.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <CommonCrypto/CommonDigest.h>
 
 @interface JXMetaViewController () <CLLocationManagerDelegate, UITextFieldDelegate,
-                                    UIScrollViewDelegate>
+                                    UIScrollViewDelegate, UIDocumentPickerDelegate>
 @property (nonatomic, copy) NSArray<NSURL *> *urls;
 @property (nonatomic, strong) UIScrollView *scroll;
 @property (nonatomic, strong) UIStackView *stack;
@@ -31,8 +32,12 @@
 @property (nonatomic, strong) UISegmentedControl *formatControl;
 @property (nonatomic, strong) UITextField *nameField;
 @property (nonatomic, strong) UIButton *runButton;
+@property (nonatomic, strong) UIButton *cancelButton;
 @property (nonatomic, strong) UIProgressView *progressView;
 @property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, strong) UILabel *historyLabel;
+@property (nonatomic, assign) BOOL cancelRequested;
+@property (nonatomic, assign) UIBackgroundTaskIdentifier runTask;
 
 @property (nonatomic, strong) UIScrollView *previewScroll;
 @property (nonatomic, strong) UIPageControl *pageControl;
@@ -258,9 +263,10 @@
 
     // 模型
     [self.stack addArrangedSubview:[self sectionTitle:@"模型"]];
-    self.modelControl = [self segments:@[ @"Real-ESRGAN 4×", @"快速" ] selected:0];
+    self.modelControl = [self segments:@[ @"Real-ESRGAN 4×", @"快速", @"自备" ] selected:0];
+    [self.modelControl addTarget:self action:@selector(modelChanged) forControlEvents:UIControlEventValueChanged];
     [self.stack addArrangedSubview:self.modelControl];
-    self.modeNote = [self caption:@"输出长边上限 4096；结果按下面的设置写入元数据。"];
+    self.modeNote = [self caption:@"输出长边上限 4032（相机口径）；结果按下面的设置写入元数据。"];
     [self.stack addArrangedSubview:self.modeNote];
 
     // 设备信息
@@ -322,9 +328,9 @@
 
     // 输出格式
     [self.stack addArrangedSubview:[self sectionTitle:@"输出格式"]];
-    self.formatControl = [self segments:@[ @"原格式", @"JPEG", @"HEIF" ] selected:0];
+    self.formatControl = [self segments:@[ @"原格式", @"JPEG", @"HEIF" ] selected:2];
     [self.stack addArrangedSubview:self.formatControl];
-    [self.stack addArrangedSubview:[self caption:@"HEIF 体积更小；换格式会重新编码"]];
+    [self.stack addArrangedSubview:[self caption:@"默认 HEIF，和相机一致；原格式会保留源文件的容器"]];
 
     // 文件名
     [self.stack addArrangedSubview:[self sectionTitle:@"文件名"]];
@@ -352,6 +358,15 @@
 
     self.statusLabel = [self caption:@""];
     [self.stack addArrangedSubview:self.statusLabel];
+
+    self.cancelButton = [self pill:@"取消" filled:NO];
+    self.cancelButton.hidden = YES;
+    [self.cancelButton addTarget:self action:@selector(cancelTapped) forControlEvents:UIControlEventTouchUpInside];
+    [self.stack addArrangedSubview:self.cancelButton];
+
+    NSString *history = [[NSUserDefaults standardUserDefaults] stringForKey:@"JXLastRun"];
+    self.historyLabel = [self caption:history.length ? [@"上次处理：" stringByAppendingString:history] : @""];
+    [self.stack addArrangedSubview:self.historyLabel];
 
     if ([CLLocationManager locationServicesEnabled] == NO) {
         self.locationLabel.text = @"系统定位服务已关闭";
@@ -430,6 +445,47 @@
                                      (unsigned long)self.urls.count]
         : @"照片已全部移除，返回上一页重新选。";
     self.runButton.enabled = self.urls.count > 0;
+}
+
+- (void)modelChanged
+{
+    if (self.modelControl.selectedSegmentIndex != 2) return;
+    if ([JXModelCatalog shared].userModelURL) return;
+    // 还没有自备模型，直接让用户挑一个
+    UIDocumentPickerViewController *picker =
+        [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[ UTTypeItem ]
+                                                                   asCopy:YES];
+    picker.delegate = self;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
+{
+    NSURL *url = urls.firstObject;
+    if (!url) return;
+    NSError *error = nil;
+    if (![[JXModelCatalog shared] importUserModelFromURL:url error:&error]) {
+        [self.modelControl setSelectedSegmentIndex:0];
+        [self alert:@"导入失败" message:error.localizedDescription];
+        return;
+    }
+    [self alert:@"已导入" message:[NSString stringWithFormat:
+        @"%@ 会在下次超分时加载。", url.lastPathComponent]];
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller
+{
+    if (![JXModelCatalog shared].userModelURL) {
+        [self.modelControl setSelectedSegmentIndex:0];
+    }
+}
+
+- (void)cancelTapped
+{
+    self.cancelRequested = YES;
+    self.cancelButton.enabled = NO;
+    self.statusLabel.text = @"正在取消（当前块算完就停）…";
 }
 
 #pragma mark - options
@@ -622,9 +678,23 @@
     self.progressView.hidden = NO;
     self.progressView.progress = 0;
     self.statusLabel.text = @"加载模型…";
+    self.cancelRequested = NO;
+    self.cancelButton.hidden = NO;
+    self.cancelButton.enabled = YES;
+    [JXModelCatalog shared].busy = YES;
+    [UIApplication sharedApplication].idleTimerDisabled = YES;   // 别让长时间批处理被锁屏打断
+    __weak typeof(self) weakSelfTask = self;
+    self.runTask = [[UIApplication sharedApplication]
+        beginBackgroundTaskWithExpirationHandler:^{
+            typeof(self) self = weakSelfTask;
+            if (!self) return;
+            [[UIApplication sharedApplication] endBackgroundTask:self.runTask];
+            self.runTask = UIBackgroundTaskInvalid;
+        }];
 
-    JXModelKind kind = (self.modelControl.selectedSegmentIndex == 0) ? JXModelKindRealESRGAN
-                                                                   : JXModelKindFastSRGAN;
+    JXModelKind kind = JXModelKindRealESRGAN;
+    if (self.modelControl.selectedSegmentIndex == 1) kind = JXModelKindFastSRGAN;
+    else if (self.modelControl.selectedSegmentIndex == 2) kind = JXModelKindUser;
     EXWriteOptions options = [self writeOptions];
     EXOutputFormat format = [self format];
     CLLocation *location = [self effectiveLocation];
@@ -647,8 +717,10 @@
         }
         NSUInteger total = urls.count;
         NSUInteger saved = 0, failed = 0;
+        NSDate *startedAll = [NSDate date];
 
         for (NSUInteger i = 0; i < total; i++) {
+            if (self.cancelRequested) break;
             @autoreleasepool {
                 NSURL *src = urls[i];
                 NSData *data = [NSData dataWithContentsOfURL:src
@@ -664,7 +736,7 @@
                     continue;
                 }
                 JXUpscaler *upscaler = [[JXUpscaler alloc] initWithModel:model];
-                upscaler.maxOutputEdge = 4096;
+                upscaler.maxOutputEdge = 4032;   // 相机口径：iPhone 主摄 4032×3024
                 NSUInteger index = i;
                 CVPixelBufferRef output = [upscaler upscalePixelBuffer:input
                     progress:^(NSInteger done, NSInteger tileTotal, double perTile) {
@@ -672,17 +744,19 @@
                             double frac = ((double)index + (double)done / (double)MAX(tileTotal, 1))
                                           / (double)total;
                             self.progressView.progress = (float)frac;
+                            double elapsedAll = -[startedAll timeIntervalSinceNow];
+                            double eta = frac > 0.02 ? elapsedAll * (1.0 - frac) / frac : 0;
                             self.statusLabel.text = (total > 1)
-                                ? [NSString stringWithFormat:@"第 %lu/%lu 张 · 第 %ld/%ld 块",
+                                ? [NSString stringWithFormat:@"第 %lu/%lu 张 · 第 %ld/%ld 块 · 还剩约 %.0f 秒",
                                                              (unsigned long)(index + 1),
                                                              (unsigned long)total,
-                                                             (long)done, (long)tileTotal]
+                                                             (long)done, (long)tileTotal, eta]
                                 : [NSString stringWithFormat:@"第 %ld/%ld 块 · 预计还剩 %.0f 秒",
                                                              (long)done, (long)tileTotal,
                                                              (tileTotal - done) * perTile];
                         });
                     }
-                    canceled:^BOOL { return NO; }
+                    canceled:^BOOL { return self.cancelRequested; }
                     error:&error];
                 CVPixelBufferRelease(input);
                 if (!output) {
@@ -760,10 +834,12 @@
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) self = weakSelf;
             if (!self) return;
-            self.running = NO;
-            self.runButton.enabled = self.urls.count > 0;
-            self.progressView.hidden = YES;
-            if (failed == 0) {
+            BOOL canceled = self.cancelRequested;
+            [self finishRunCleanup];
+            if (canceled) {
+                self.statusLabel.text = [NSString stringWithFormat:
+                    @"已取消，已保存 %lu 张", (unsigned long)saved];
+            } else if (failed == 0) {
                 self.statusLabel.text = (saved == 1)
                     ? @"已保存 1 张新照片"
                     : [NSString stringWithFormat:@"已保存 %lu 张新照片", (unsigned long)saved];
@@ -773,6 +849,13 @@
                                                                    (unsigned long)failed];
             }
             if (saved > 0) {
+                NSDateFormatter *df = [NSDateFormatter new];
+                df.dateFormat = @"MM-dd HH:mm";
+                NSString *record = [NSString stringWithFormat:@"%lu 张 · %@",
+                                    (unsigned long)saved, [df stringFromDate:[NSDate date]]];
+                [[NSUserDefaults standardUserDefaults] setObject:record forKey:@"JXLastRun"];
+                self.historyLabel.text = [@"上次处理：" stringByAppendingString:record];
+
                 [self showToast:(saved == 1)
                     ? @"已保存 1 张新照片到相册"
                     : [NSString stringWithFormat:@"已保存 %lu 张新照片到相册",
@@ -782,11 +865,24 @@
     });
 }
 
-- (void)finishAIWithError:(NSError *)error saved:(BOOL)saved
+- (void)finishRunCleanup
 {
     self.running = NO;
     self.runButton.enabled = self.urls.count > 0;
     self.progressView.hidden = YES;
+    self.cancelButton.hidden = YES;
+    self.cancelButton.enabled = YES;
+    [JXModelCatalog shared].busy = NO;
+    [UIApplication sharedApplication].idleTimerDisabled = NO;
+    if (self.runTask != UIBackgroundTaskInvalid) {
+        [[UIApplication sharedApplication] endBackgroundTask:self.runTask];
+        self.runTask = UIBackgroundTaskInvalid;
+    }
+}
+
+- (void)finishAIWithError:(NSError *)error saved:(BOOL)saved
+{
+    [self finishRunCleanup];
     self.statusLabel.text = @"";
     [self alert:@"超分失败" message:error.localizedDescription ?: @"未知错误"];
 }

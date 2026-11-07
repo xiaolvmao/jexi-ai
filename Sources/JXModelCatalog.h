@@ -32,6 +32,11 @@ typedef NS_ENUM(NSInteger, JXModelKind) {
 /// Drops every loaded model (called when the app goes to the background).
 - (void)releaseModels;
 
+/// Set while a run is in progress: releaseModels then keeps the model alive,
+/// because the background notification would otherwise pull it out from under
+/// a running batch.
+@property (nonatomic, assign) BOOL busy;
+
 /// Copies a picked .mlmodel/.mlpackage into the app and makes it the user model.
 - (BOOL)importUserModelFromURL:(NSURL *)url error:(NSError **)error;
 

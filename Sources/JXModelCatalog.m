@@ -115,6 +115,7 @@
 
 - (void)releaseModels
 {
+    if (self.busy) return;   // 批处理进行中，模型不能收走
     self.loadedModel = nil;
 }
 

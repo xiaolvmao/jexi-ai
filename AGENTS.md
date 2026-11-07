@@ -124,7 +124,10 @@ Sources/EXDevice/EXMetadata     从 jexi 搬来的设备信息与元数据写入
 传统 Lanczos 放大锐化（原 jexi 的「超清增强」）已经移除，放大只保留 AI 超分这一条路；
 `Sources/EXEnhancer.*` 因此不再存在。
 
-第一页 `JXPickViewController` 两条入口：AI 超分（单张）和元数据与增强（多选）。
+App 启动即弹相册（可多选），选完进处理页：模型（Real-ESRGAN / 快速 / 自备）、机型、时间、定位、
+输出格式（默认 HEIF）、文件名（留空按相机规则 IMG_xxxx），点「超分并保存到相册」逐张跑。
+输出长边上限 4032（iPhone 主摄口径），运行中可取消，期间禁用锁屏并申请后台任务，
+批量结束用底部浮层提示。
 
 ## 自测
 
