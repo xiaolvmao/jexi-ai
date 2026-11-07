@@ -246,7 +246,8 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     [self.pageControl addTarget:self action:@selector(pageChanged) forControlEvents:UIControlEventValueChanged];
     [self.stack addArrangedSubview:self.pageControl];
 
-    self.previewHint = [self caption:@"长按预览可以删掉重新选。"];
+    self.previewHint = [self caption:[NSString stringWithFormat:
+        @"已选 %lu 张，左右滑动查看，长按可删除。", (unsigned long)self.urls.count]];
     [self.stack addArrangedSubview:self.previewHint];
     [self.stack addArrangedSubview:[self caption:@"原图不动，结果另存为新照片。"]];
 
@@ -620,13 +621,8 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
 
 - (void)runAI
 {
-    NSURL *first = self.urls.firstObject;
-    NSData *data = [NSData dataWithContentsOfURL:first options:NSDataReadingMappedIfSafe error:NULL];
-    UIImage *original = data ? [UIImage imageWithData:data scale:1.0] : nil;
-    if (!data || !original) {
-        [self alert:@"读不到照片" message:@"重新选一张试试。"];
-        return;
-    }
+    NSArray<NSURL *> *urls = self.urls;
+    if (urls.count == 0) return;
     self.running = YES;
     self.runButton.enabled = NO;
     self.progressView.hidden = NO;
@@ -638,15 +634,11 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     EXWriteOptions options = [self writeOptions];
     EXOutputFormat format = [self format];
     CLLocation *location = [self effectiveLocation];
-    NSDate *date = self.timeControl.selectedSegmentIndex == 2 ? self.datePicker.date : [NSDate date];
+    NSDate *baseDate = self.timeControl.selectedSegmentIndex == 2 ? self.datePicker.date
+                                                                  : [NSDate date];
     BOOL customName = self.nameSwitch.isOn;
     NSString *baseName = [self.nameField.text stringByTrimmingCharactersInSet:
                                                     [NSCharacterSet whitespaceCharacterSet]];
-    NSString *ext = format == EXOutputFormatHEIF ? @"heic"
-                  : (format == EXOutputFormatJPEG ? @"jpg" : first.pathExtension);
-    NSString *filename = (customName && baseName.length)
-        ? [NSString stringWithFormat:@"%@.%@", baseName, ext]
-        : JXHashedName(first, ext);
 
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
@@ -660,99 +652,154 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
             });
             return;
         }
-        CVPixelBufferRef source = JXCreatePixelBufferFromImageData(data, NULL, &error);
-        if (!source) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self finishAIWithError:error saved:NO];
-            });
-            return;
-        }
-        JXUpscaler *upscaler = [[JXUpscaler alloc] initWithModel:model];
-        upscaler.maxOutputEdge = 4096;
-        NSDate *started = [NSDate date];
-        CVPixelBufferRef output = [upscaler upscalePixelBuffer:source
-            progress:^(NSInteger done, NSInteger total, double perTile) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    double elapsed = -[started timeIntervalSinceNow];
-                    self.progressView.progress = (float)done / (float)MAX(total, 1);
-                    self.statusLabel.text = [NSString stringWithFormat:
-                        @"第 %ld/%ld 块 · 已用 %.0f 秒 · 预计还剩 %.0f 秒",
-                        (long)done, (long)total, elapsed, (total - done) * perTile];
+        NSUInteger total = urls.count;
+        NSUInteger saved = 0, failed = 0;
+        UIImage *lastImage = nil, *lastOriginal = nil;
+        NSDictionary *lastProperties = nil;
+        BOOL lastPrescaled = NO;
+
+        for (NSUInteger i = 0; i < total; i++) {
+            @autoreleasepool {
+                NSURL *src = urls[i];
+                NSData *data = [NSData dataWithContentsOfURL:src
+                                                     options:NSDataReadingMappedIfSafe
+                                                       error:NULL];
+                if (data.length == 0) {
+                    failed++;
+                    continue;
+                }
+                UIImage *original = [UIImage imageWithData:data scale:1.0];
+                CVPixelBufferRef input = JXCreatePixelBufferFromImageData(data, NULL, &error);
+                if (!input) {
+                    failed++;
+                    continue;
+                }
+                JXUpscaler *upscaler = [[JXUpscaler alloc] initWithModel:model];
+                upscaler.maxOutputEdge = 4096;
+                NSUInteger index = i;
+                CVPixelBufferRef output = [upscaler upscalePixelBuffer:input
+                    progress:^(NSInteger done, NSInteger tileTotal, double perTile) {
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            double frac = ((double)index + (double)done / (double)MAX(tileTotal, 1))
+                                          / (double)total;
+                            self.progressView.progress = (float)frac;
+                            self.statusLabel.text = (total > 1)
+                                ? [NSString stringWithFormat:@"第 %lu/%lu 张 · 第 %ld/%ld 块",
+                                                             (unsigned long)(index + 1),
+                                                             (unsigned long)total,
+                                                             (long)done, (long)tileTotal]
+                                : [NSString stringWithFormat:@"第 %ld/%ld 块 · 预计还剩 %.0f 秒",
+                                                             (long)done, (long)tileTotal,
+                                                             (tileTotal - done) * perTile];
+                        });
+                    }
+                    canceled:^BOOL { return NO; }
+                    error:&error];
+                CVPixelBufferRelease(input);
+                if (!output) {
+                    failed++;
+                    continue;
+                }
+                UIImage *result = JXImageFromPixelBuffer(output);
+                BOOL prescaled = upscaler.didPrescale;
+                CVPixelBufferRelease(output);
+                if (!result) {
+                    failed++;
+                    continue;
+                }
+
+                NSString *ext = format == EXOutputFormatHEIF ? @"heic"
+                              : (format == EXOutputFormatJPEG ? @"jpg" : src.pathExtension);
+                NSString *filename = nil;
+                if (customName && baseName.length) {
+                    filename = (total > 1)
+                        ? [NSString stringWithFormat:@"%@-%lu.%@", baseName,
+                                                     (unsigned long)(index + 1), ext]
+                        : [NSString stringWithFormat:@"%@.%@", baseName, ext];
+                } else {
+                    filename = JXHashedName(src, ext);
+                }
+
+                // 像素先落成临时文件，再让 EXMetadata 按选项写元数据与格式
+                NSString *token = [[NSUUID UUID] UUIDString];
+                NSString *tmp = NSTemporaryDirectory();
+                NSURL *raw = [NSURL fileURLWithPath:
+                    [tmp stringByAppendingPathComponent:
+                             [NSString stringWithFormat:@"ai-%@.jpg", token]]];
+                NSURL *final = [NSURL fileURLWithPath:
+                    [tmp stringByAppendingPathComponent:
+                             [NSString stringWithFormat:@"out-%@.%@", token, ext]]];
+                NSDate *date = [baseDate dateByAddingTimeInterval:(NSTimeInterval)index];
+                BOOL wrote = [UIImageJPEGRepresentation(result, 0.95) writeToURL:raw
+                                                                         options:NSDataWritingAtomic
+                                                                           error:NULL];
+                BOOL ok = wrote && [EXMetadata writeSourceURL:raw
+                                                toDestination:final
+                                                      options:options
+                                                     location:location
+                                                         date:date
+                                                       format:format
+                                                        error:&error];
+                [[NSFileManager defaultManager] removeItemAtURL:raw error:NULL];
+                if (!ok) {
+                    [[NSFileManager defaultManager] removeItemAtURL:final error:NULL];
+                    failed++;
+                    continue;
+                }
+                NSData *finalData = [NSData dataWithContentsOfURL:final];
+                UIImage *finalImage = finalData ? [UIImage imageWithData:finalData scale:1.0] : nil;
+                if (!finalImage) {
+                    [[NSFileManager defaultManager] removeItemAtURL:final error:NULL];
+                    failed++;
+                    continue;
+                }
+                dispatch_semaphore_t gate = dispatch_semaphore_create(0);
+                __block BOOL success = NO;
+                JXSaveFileToPhotoLibrary(final, filename, ^(BOOL ok2, NSError *saveError) {
+                    success = ok2;
+                    dispatch_semaphore_signal(gate);
                 });
+                dispatch_semaphore_wait(gate, dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC));
+                [[NSFileManager defaultManager] removeItemAtURL:final error:NULL];
+                if (success) {
+                    saved++;
+                    lastImage = finalImage;
+                    lastOriginal = original;
+                    lastProperties = JXImagePropertiesFromData(finalData);
+                    lastPrescaled = prescaled;
+                } else {
+                    failed++;
+                }
             }
-            canceled:^BOOL { return NO; }
-            error:&error];
-        CVPixelBufferRelease(source);
-        if (!output) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self finishAIWithError:error saved:NO];
-            });
-            return;
-        }
-        UIImage *result = JXImageFromPixelBuffer(output);
-        BOOL prescaled = upscaler.didPrescale;
-        CVPixelBufferRelease(output);
-        if (!result) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self finishAIWithError:[NSError errorWithDomain:@"jexi-ai" code:1 userInfo:@{
-                    NSLocalizedDescriptionKey : @"结果图创建失败"
-                }] saved:NO];
-            });
-            return;
         }
 
-        // 先把像素写成临时文件，再让 EXMetadata 按选项重写元数据与格式
-        NSString *token = [[NSUUID UUID] UUIDString];
-        NSString *tmp = NSTemporaryDirectory();
-        NSURL *raw = [NSURL fileURLWithPath:
-            [tmp stringByAppendingPathComponent:[NSString stringWithFormat:@"ai-%@.jpg", token]]];
-        NSURL *final = [NSURL fileURLWithPath:
-            [tmp stringByAppendingPathComponent:[NSString stringWithFormat:@"out-%@.%@", token, ext]]];
-        BOOL wrote = [UIImageJPEGRepresentation(result, 0.95) writeToURL:raw atomically:YES];
-        BOOL ok = wrote && [EXMetadata writeSourceURL:raw
-                                        toDestination:final
-                                              options:options
-                                             location:location
-                                                 date:date
-                                               format:format
-                                                error:&error];
-        [[NSFileManager defaultManager] removeItemAtURL:raw error:NULL];
-        if (!ok) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self finishAIWithError:error ?: [NSError errorWithDomain:@"jexi-ai" code:2
-                                                                    userInfo:@{
-                                    NSLocalizedDescriptionKey : @"写入失败"}] saved:NO];
-            });
-            return;
-        }
-        NSData *finalData = [NSData dataWithContentsOfURL:final];
-        UIImage *finalImage = finalData ? [UIImage imageWithData:finalData scale:1.0] : nil;
-        NSDictionary *finalProperties = JXImagePropertiesFromData(finalData);
-        if (!finalImage) {
-            [[NSFileManager defaultManager] removeItemAtURL:final error:NULL];
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self finishAIWithError:[NSError errorWithDomain:@"jexi-ai" code:3 userInfo:@{
-                    NSLocalizedDescriptionKey : @"结果图读取失败"}] saved:NO];
-            });
-            return;
-        }
-        JXSaveFileToPhotoLibrary(final, filename, ^(BOOL success, NSError *saveError) {
-            [[NSFileManager defaultManager] removeItemAtURL:final error:NULL];
-            if (!success) {
-                [self finishAIWithError:saveError saved:NO];
-                return;
-            }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) self = weakSelf;
+            if (!self) return;
             self.running = NO;
-            self.runButton.enabled = YES;
+            self.runButton.enabled = self.urls.count > 0;
             self.progressView.hidden = YES;
-            self.statusLabel.text = [NSString stringWithFormat:@"已保存 1 张新照片（%@）", filename];
-            JXPreviewViewController *vc =
-                [[JXPreviewViewController alloc] initWithResultImage:finalImage
-                                                       originalImage:original
-                                                          properties:finalProperties
-                                                           prescaled:prescaled
-                                                               saved:YES];
-            [self.navigationController pushViewController:vc animated:YES];
+            if (failed == 0) {
+                self.statusLabel.text = (saved == 1)
+                    ? @"已保存 1 张新照片"
+                    : [NSString stringWithFormat:@"已保存 %lu 张新照片", (unsigned long)saved];
+            } else {
+                self.statusLabel.text = [NSString stringWithFormat:@"完成 %lu 张，失败 %lu 张",
+                                                                   (unsigned long)saved,
+                                                                   (unsigned long)failed];
+            }
+            if (saved == 1 && lastImage) {
+                JXPreviewViewController *vc =
+                    [[JXPreviewViewController alloc] initWithResultImage:lastImage
+                                                           originalImage:lastOriginal
+                                                              properties:lastProperties
+                                                               prescaled:lastPrescaled
+                                                                   saved:YES];
+                [self.navigationController pushViewController:vc animated:YES];
+            } else if (saved > 1) {
+                [self alert:@"完成" message:[NSString stringWithFormat:
+                    @"已保存 %lu 张新照片到相册，原图未改动。", (unsigned long)saved]];
+            }
         });
     });
 }

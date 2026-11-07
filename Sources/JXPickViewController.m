@@ -92,7 +92,7 @@
     self.presenting = YES;
     PHPickerConfiguration *cfg = [[PHPickerConfiguration alloc] init];
     cfg.filter = [PHPickerFilter imagesFilter];
-    cfg.selectionLimit = 1;
+    cfg.selectionLimit = 0;   // 可以多选
     cfg.preferredAssetRepresentationMode = PHPickerConfigurationAssetRepresentationModeCurrent;
     PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:cfg];
     picker.delegate = self;
@@ -115,64 +115,63 @@
     [self.spinner startAnimating];
     self.pickButton.enabled = NO;
 
-    NSItemProvider *provider = results.firstObject.itemProvider;
-    NSString *type = [provider hasItemConformingToTypeIdentifier:UTTypeImage.identifier]
-        ? UTTypeImage.identifier
-        : provider.registeredTypeIdentifiers.firstObject;
-    if (!type) {
-        [self finishWithMessage:@"读不到这张照片"];
-        return;
+    NSURL *dir = [NSURL fileURLWithPath:
+        [NSTemporaryDirectory() stringByAppendingPathComponent:@"picked"]];
+    [[NSFileManager defaultManager] createDirectoryAtURL:dir
+                             withIntermediateDirectories:YES
+                                              attributes:nil
+                                                   error:NULL];
+
+    dispatch_group_t group = dispatch_group_create();
+    NSMutableArray<NSURL *> *copies = [NSMutableArray array];
+    NSLock *lock = [NSLock new];
+
+    for (PHPickerResult *result in results) {
+        NSItemProvider *provider = result.itemProvider;
+        NSString *type = [provider hasItemConformingToTypeIdentifier:UTTypeImage.identifier]
+            ? UTTypeImage.identifier
+            : provider.registeredTypeIdentifiers.firstObject;
+        if (!type) continue;
+        dispatch_group_enter(group);
+        [provider loadFileRepresentationForTypeIdentifier:type
+                                        completionHandler:^(NSURL *url, NSError *error) {
+            NSData *data = url ? [NSData dataWithContentsOfURL:url options:0 error:NULL] : nil;
+            if (data.length) {
+                NSURL *copy = [dir URLByAppendingPathComponent:
+                    [NSString stringWithFormat:@"%@.%@", [[NSUUID UUID] UUIDString],
+                                               url.pathExtension.length ? url.pathExtension : @"img"]];
+                if ([data writeToURL:copy options:NSDataWritingAtomic error:NULL]) {
+                    [lock lock];
+                    [copies addObject:copy];
+                    [lock unlock];
+                    NSDictionary *properties = JXImagePropertiesFromData(data);
+                    JXNote(@"picked %lu bytes (%@), exif=%lu gps=%lu, w=%@ h=%@",
+                           (unsigned long)data.length, type,
+                           (unsigned long)[properties[(id)kCGImagePropertyExifDictionary] count],
+                           (unsigned long)[properties[(id)kCGImagePropertyGPSDictionary] count],
+                           properties[(id)kCGImagePropertyPixelWidth],
+                           properties[(id)kCGImagePropertyPixelHeight]);
+                }
+            }
+            dispatch_group_leave(group);
+        }];
     }
 
     __weak typeof(self) weakSelf = self;
-    [provider loadFileRepresentationForTypeIdentifier:type
-                                    completionHandler:^(NSURL *url, NSError *error) {
-        NSData *data = url ? [NSData dataWithContentsOfURL:url options:0 error:NULL] : nil;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            typeof(self) self = weakSelf;
-            if (!self) return;
-            [self.spinner stopAnimating];
-            self.pickButton.enabled = YES;
-            self.hintLabel.text = @"选一张照片";
-            if (!data) {
-                [self alertWithTitle:@"读不到这张照片" message:error.localizedDescription];
-                return;
-            }
-            UIImage *image = [UIImage imageWithData:data scale:1.0];
-            if (!image) {
-                [self alertWithTitle:@"解不开这张照片" message:@"换一张试试。"];
-                return;
-            }
-            NSDictionary *properties = JXImagePropertiesFromData(data);
-            JXNote(@"picked %lu bytes (%@), exif=%lu tiff=%lu gps=%lu, w=%@ h=%@",
-                   (unsigned long)data.length, type,
-                   (unsigned long)[properties[(id)kCGImagePropertyExifDictionary] count],
-                   (unsigned long)[properties[(id)kCGImagePropertyTIFFDictionary] count],
-                   (unsigned long)[properties[(id)kCGImagePropertyGPSDictionary] count],
-                   properties[(id)kCGImagePropertyPixelWidth],
-                   properties[(id)kCGImagePropertyPixelHeight]);
-
-            // 拷一份自己的副本，选择器给的临时文件随时会被删
-            NSURL *dir = [NSURL fileURLWithPath:
-                [NSTemporaryDirectory() stringByAppendingPathComponent:@"picked"]];
-            [[NSFileManager defaultManager] createDirectoryAtURL:dir
-                                     withIntermediateDirectories:YES
-                                                      attributes:nil
-                                                           error:NULL];
-            NSURL *copy = [dir URLByAppendingPathComponent:
-                [NSString stringWithFormat:@"%@.%@", [[NSUUID UUID] UUIDString],
-                                           url.pathExtension.length ? url.pathExtension : @"img"]];
-            NSError *writeError = nil;
-            if (![data writeToURL:copy options:NSDataWritingAtomic error:&writeError]) {
-                [self alertWithTitle:@"保存副本失败" message:writeError.localizedDescription];
-                return;
-            }
-            self.cancelled = NO;
-            JXMetaViewController *vc =
-                [[JXMetaViewController alloc] initWithFileURLs:@[ copy ]];
-            [self.navigationController pushViewController:vc animated:YES];
-        });
-    }];
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        typeof(self) self = weakSelf;
+        if (!self) return;
+        [self.spinner stopAnimating];
+        self.pickButton.enabled = YES;
+        self.hintLabel.text = @"选一张照片";
+        if (copies.count == 0) {
+            [self finishWithMessage:@"没有读到照片，重新选一次试试。"];
+            return;
+        }
+        self.cancelled = NO;
+        JXMetaViewController *vc = [[JXMetaViewController alloc] initWithFileURLs:copies];
+        [self.navigationController pushViewController:vc animated:YES];
+    });
 }
 
 - (void)finishWithMessage:(NSString *)message
