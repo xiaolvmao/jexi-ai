@@ -132,6 +132,30 @@ NSDictionary *JXImagePropertiesFromData(NSData *data)
     return props;
 }
 
+NSString *JXCameraStyleFilename(NSString *ext, NSUInteger offset)
+{
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dcim = @"/var/mobile/Media/DCIM";
+    NSUInteger highest = 0;
+    for (NSString *sub in [fm contentsOfDirectoryAtPath:dcim error:NULL]) {
+        NSString *dir = [dcim stringByAppendingPathComponent:sub];
+        for (NSString *name in [fm contentsOfDirectoryAtPath:dir error:NULL]) {
+            NSString *base = name.stringByDeletingPathExtension;
+            if (![base hasPrefix:@"IMG_"]) continue;
+            NSString *digits = [base substringFromIndex:4];
+            if (digits.length == 0) continue;
+            NSCharacterSet *nonDigits =
+                [[NSCharacterSet decimalDigitCharacterSet] invertedSet];
+            if ([digits rangeOfCharacterFromSet:nonDigits].location != NSNotFound) continue;
+            NSUInteger n = (NSUInteger)digits.integerValue;
+            if (n > highest) highest = n;
+        }
+    }
+    if (highest == 0) highest = 1;
+    return [NSString stringWithFormat:@"IMG_%04lu.%@",
+                                      (unsigned long)(highest + offset), ext ?: @"jpg"];
+}
+
 static NSDictionary *JXMetadataForUprightImage(NSDictionary *original, size_t w, size_t h)
 {
     NSMutableDictionary *props = original ? [original mutableCopy] : [NSMutableDictionary dictionary];

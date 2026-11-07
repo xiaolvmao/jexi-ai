@@ -31,7 +31,6 @@
 @property (nonatomic, strong) UILabel *locationLabel;
 @property (nonatomic, strong) UISegmentedControl *formatControl;
 @property (nonatomic, strong) UISwitch *nameSwitch;
-@property (nonatomic, strong) UITextField *nameField;
 @property (nonatomic, strong) UIButton *runButton;
 @property (nonatomic, strong) UIProgressView *progressView;
 @property (nonatomic, strong) UILabel *statusLabel;
@@ -123,8 +122,6 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
 
 - (UITextField *)activeTextField
 {
-    if (self.nameField.isFirstResponder) return self.nameField;
-    if (self.radiusField.isFirstResponder) return self.radiusField;
     return nil;
 }
 
@@ -324,21 +321,9 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     // 文件名
     [self.stack addArrangedSubview:[self sectionTitle:@"文件名"]];
     self.nameSwitch = [UISwitch new];
-    self.nameSwitch.on = YES;              // 自定义文件名默认打开
-    [self.stack addArrangedSubview:[self labelledRow:@"自定义文件名" control:self.nameSwitch]];
-    self.nameField = [UITextField new];
-    self.nameField.placeholder = @"留空则 IMG_ + 图片 hash";
-    self.nameField.textColor = [UIColor whiteColor];
-    self.nameField.font = [UIFont systemFontOfSize:15];
-    self.nameField.borderStyle = UITextBorderStyleRoundedRect;
-    self.nameField.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
-    self.nameField.delegate = self;
-    self.nameField.hidden = NO;
-    self.nameField.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.nameField.heightAnchor constraintEqualToConstant:40].active = YES;
-    [self.nameField addTarget:self action:@selector(dismissKeyboard) forControlEvents:UIControlEventEditingDidEndOnExit];
-    [self.stack addArrangedSubview:self.nameField];
-    [self.nameSwitch addTarget:self action:@selector(nameSwitchChanged) forControlEvents:UIControlEventValueChanged];
+    self.nameSwitch.on = YES;              // 默认按相机规则命名
+    [self.stack addArrangedSubview:[self labelledRow:@"按相机规则命名（IMG_0000）" control:self.nameSwitch]];
+    [self.stack addArrangedSubview:[self caption:@"打开时用相册里下一个 IMG_ 编号；关闭时用 IMG_ + 内容 hash"]];
 
     // 运行
     self.runButton = [self pill:@"超分并保存到相册" filled:YES];
@@ -437,16 +422,6 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
 - (void)timeModeChanged
 {
     self.datePicker.hidden = (self.timeControl.selectedSegmentIndex != 2);
-}
-
-- (void)nameSwitchChanged
-{
-    self.nameField.hidden = !self.nameSwitch.isOn;
-}
-
-- (void)dismissKeyboard
-{
-    [self.nameField resignFirstResponder];
 }
 
 - (NSString *)summaryText
@@ -636,9 +611,7 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     CLLocation *location = [self effectiveLocation];
     NSDate *baseDate = self.timeControl.selectedSegmentIndex == 2 ? self.datePicker.date
                                                                   : [NSDate date];
-    BOOL customName = self.nameSwitch.isOn;
-    NSString *baseName = [self.nameField.text stringByTrimmingCharactersInSet:
-                                                    [NSCharacterSet whitespaceCharacterSet]];
+    BOOL cameraNames = self.nameSwitch.isOn;
 
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
@@ -710,15 +683,9 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
 
                 NSString *ext = format == EXOutputFormatHEIF ? @"heic"
                               : (format == EXOutputFormatJPEG ? @"jpg" : src.pathExtension);
-                NSString *filename = nil;
-                if (customName && baseName.length) {
-                    filename = (total > 1)
-                        ? [NSString stringWithFormat:@"%@-%lu.%@", baseName,
-                                                     (unsigned long)(index + 1), ext]
-                        : [NSString stringWithFormat:@"%@.%@", baseName, ext];
-                } else {
-                    filename = JXHashedName(src, ext);
-                }
+                NSString *filename = cameraNames
+                    ? JXCameraStyleFilename(ext, index)
+                    : JXHashedName(src, ext);
 
                 // 像素先落成临时文件，再让 EXMetadata 按选项写元数据与格式
                 NSString *token = [[NSUUID UUID] UUIDString];
@@ -797,8 +764,8 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
                                                                    saved:YES];
                 [self.navigationController pushViewController:vc animated:YES];
             } else if (saved > 1) {
-                [self alert:@"完成" message:[NSString stringWithFormat:
-                    @"已保存 %lu 张新照片到相册，原图未改动。", (unsigned long)saved]];
+                [self showToast:[NSString stringWithFormat:
+                    @"已保存 %lu 张新照片到相册", (unsigned long)saved]];
             }
         });
     });
@@ -811,6 +778,66 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     self.progressView.hidden = YES;
     self.statusLabel.text = @"";
     [self alert:@"超分失败" message:error.localizedDescription ?: @"未知错误"];
+}
+
+- (void)showToast:(NSString *)text
+{
+    UIView *toast = [UIView new];
+    toast.backgroundColor = [UIColor colorWithWhite:0.16 alpha:0.97];
+    toast.layer.cornerRadius = 16;
+    toast.layer.borderWidth = 1;
+    toast.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.10].CGColor;
+    toast.translatesAutoresizingMaskIntoConstraints = NO;
+
+    UIImageView *tick = [[UIImageView alloc] initWithImage:
+        [UIImage systemImageNamed:@"checkmark.circle.fill"]];
+    tick.tintColor = [UIColor colorWithRed:0.35 green:0.85 blue:0.55 alpha:1];
+    tick.translatesAutoresizingMaskIntoConstraints = NO;
+    [toast addSubview:tick];
+
+    UILabel *label = [UILabel new];
+    label.text = text;
+    label.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+    label.textColor = [UIColor colorWithWhite:0.96 alpha:1];
+    label.numberOfLines = 0;
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    [toast addSubview:label];
+
+    [self.view addSubview:toast];
+    [NSLayoutConstraint activateConstraints:@[
+        [toast.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+        [toast.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor
+                                           constant:-24],
+        [toast.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.view.leadingAnchor
+                                                         constant:24],
+        [toast.trailingAnchor constraintLessThanOrEqualToAnchor:self.view.trailingAnchor
+                                                       constant:-24],
+        [tick.leadingAnchor constraintEqualToAnchor:toast.leadingAnchor constant:14],
+        [tick.centerYAnchor constraintEqualToAnchor:toast.centerYAnchor],
+        [tick.widthAnchor constraintEqualToConstant:20],
+        [tick.heightAnchor constraintEqualToConstant:20],
+        [label.leadingAnchor constraintEqualToAnchor:tick.trailingAnchor constant:8],
+        [label.trailingAnchor constraintEqualToAnchor:toast.trailingAnchor constant:-16],
+        [label.topAnchor constraintEqualToAnchor:toast.topAnchor constant:12],
+        [label.bottomAnchor constraintEqualToAnchor:toast.bottomAnchor constant:-12],
+    ]];
+
+    toast.alpha = 0;
+    toast.transform = CGAffineTransformMakeTranslation(0, 12);
+    [UIView animateWithDuration:0.22 animations:^{
+        toast.alpha = 1;
+        toast.transform = CGAffineTransformIdentity;
+    } completion:^(BOOL finished) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.6 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [UIView animateWithDuration:0.25 animations:^{
+                toast.alpha = 0;
+                toast.transform = CGAffineTransformMakeTranslation(0, 12);
+            } completion:^(BOOL done) {
+                [toast removeFromSuperview];
+            }];
+        });
+    }];
 }
 
 - (void)alert:(NSString *)title message:(NSString *)message

@@ -23,6 +23,11 @@ UIImage *_Nullable JXImageFromPixelBuffer(CVPixelBufferRef buffer);
 /// result carries the same time, camera and location.
 NSDictionary *_Nullable JXImagePropertiesFromData(NSData *data);
 
+/// A filename in the camera's own style: IMG_0001.JPG, one past the highest
+/// IMG_ number already in DCIM.  offset lets a batch continue the sequence.
+/// Falls back to IMG_0001 when DCIM cannot be read.
+NSString *JXCameraStyleFilename(NSString *ext, NSUInteger offset);
+
 /// Appends one line to /var/mobile/jexi-ai-debug.log (the app runs without a
 /// sandbox, so a fixed path is easy to read from a shell afterwards).
 void JXNote(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
