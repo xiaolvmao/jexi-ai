@@ -1,0 +1,13 @@
+# Tools: compiled binaries and entitlements stay out; the .m sources are the record.
+Tools/fetchmodel
+Tools/modelprobe
+Tools/selftest
+# Model weights are downloaded, never committed (67 MB + 0.6 MB).
+Models/*.mlmodel
+Models/*.mlpackage
+# Build output
+Builds/
+ApelinBuilds/
+*.o
+*.dSYM/
+.DS_Store
