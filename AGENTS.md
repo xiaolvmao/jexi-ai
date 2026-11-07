@@ -117,8 +117,11 @@ Sources/JXUpscaler.{h,m}        分块推理内核
 - `Sources/EXEnhancer.{h,m}` —— Core Image Lanczos 放大 + Unsharp Mask，长边 8192 上限。
 
 `Sources/JXMetaViewController` 把它们组合成批量页：分页预览（左右滑动、长按删除）、写入机型/系统/镜头曝光、
-时间（不改 / 现在 / 指定）、位置（抹掉 / 当前定位 / 附近随机 + 半径 + 换一个）、输出格式（原格式 / JPEG / HEIF）、
-文件名（自定义，留空则 `IMG_` + 内容 SHA-256 前 8 位）、Lanczos 2×/3×/4× 增强，最后逐张写入并保存。
+时间（不改 / 现在 / 指定）、位置（抹掉 / 当前定位 / 附近随机 + 半径 100 m/500 m/1 km/自定义手输米数 + 换一个）、
+输出格式（原格式 / JPEG / HEIF）、文件名（自定义，留空则 `IMG_` + 内容 SHA-256 前 8 位），最后逐张写入并保存。
+
+传统 Lanczos 放大锐化（原 jexi 的「超清增强」）已经移除，放大只保留 AI 超分这一条路；
+`Sources/EXEnhancer.*` 因此不再存在。
 
 第一页 `JXPickViewController` 两条入口：AI 超分（单张）和元数据与增强（多选）。
 

@@ -6,7 +6,6 @@
 #import "JXMetaViewController.h"
 #import "EXDevice.h"
 #import "EXMetadata.h"
-#import "EXEnhancer.h"
 #import "JXImageIO.h"
 #import <CoreLocation/CoreLocation.h>
 #import <CommonCrypto/CommonDigest.h>
@@ -23,11 +22,11 @@
 @property (nonatomic, strong) UIDatePicker *datePicker;
 @property (nonatomic, strong) UISegmentedControl *locationControl;
 @property (nonatomic, strong) UISegmentedControl *radiusControl;
+@property (nonatomic, strong) UITextField *radiusField;
 @property (nonatomic, strong) UILabel *locationLabel;
 @property (nonatomic, strong) UISegmentedControl *formatControl;
 @property (nonatomic, strong) UISwitch *nameSwitch;
 @property (nonatomic, strong) UITextField *nameField;
-@property (nonatomic, strong) UISegmentedControl *enhanceControl;
 @property (nonatomic, strong) UIButton *runButton;
 @property (nonatomic, strong) UIProgressView *progressView;
 @property (nonatomic, strong) UILabel *statusLabel;
@@ -214,10 +213,24 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     [self.stack addArrangedSubview:[self sectionTitle:@"位置"]];
     self.locationControl = [self segments:@[ @"不改（抹掉）", @"当前定位", @"附近随机" ] selected:1];
     [self.stack addArrangedSubview:self.locationControl];
-    self.radiusControl = [self segments:@[ @"100 m", @"500 m", @"1 km", @"5 km" ] selected:1];
+    self.radiusControl = [self segments:@[ @"100 m", @"500 m", @"1 km", @"自定义" ] selected:1];
     self.radiusControl.hidden = YES;
     [self.radiusControl addTarget:self action:@selector(radiusChanged) forControlEvents:UIControlEventValueChanged];
     [self.stack addArrangedSubview:self.radiusControl];
+
+    self.radiusField = [UITextField new];
+    self.radiusField.placeholder = @"半径（米），留空按 500";
+    self.radiusField.keyboardType = UIKeyboardTypeNumberPad;
+    self.radiusField.textColor = [UIColor whiteColor];
+    self.radiusField.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightRegular];
+    self.radiusField.borderStyle = UITextBorderStyleRoundedRect;
+    self.radiusField.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
+    self.radiusField.hidden = YES;
+    self.radiusField.delegate = self;
+    self.radiusField.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.radiusField.heightAnchor constraintEqualToConstant:40].active = YES;
+    [self.radiusField addTarget:self action:@selector(radiusTextChanged) forControlEvents:UIControlEventEditingChanged];
+    [self.stack addArrangedSubview:self.radiusField];
     self.locationLabel = [self caption:@"点「当前定位」授权后读取一次位置"];
     [self.stack addArrangedSubview:self.locationLabel];
     self.rerollButton = [self pill:@"换一个位置" filled:NO];
@@ -254,12 +267,6 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     [self.nameField addTarget:self action:@selector(dismissKeyboard) forControlEvents:UIControlEventEditingDidEndOnExit];
     [self.stack addArrangedSubview:self.nameField];
     [self.nameSwitch addTarget:self action:@selector(nameSwitchChanged) forControlEvents:UIControlEventValueChanged];
-
-    // 增强
-    [self.stack addArrangedSubview:[self sectionTitle:@"超清增强（传统放大锐化）"]];
-    self.enhanceControl = [self segments:@[ @"关闭", @"2×", @"3×", @"4×" ] selected:0];
-    [self.stack addArrangedSubview:self.enhanceControl];
-    [self.stack addArrangedSubview:[self caption:@"Lanczos 放大 + Unsharp Mask，长边最大 8192 像素；要和 AI 超分叠加时请先用 AI 超分页"]];
 
     // 运行
     self.runButton = [self pill:@"写入并保存到相册" filled:YES];
@@ -411,6 +418,14 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
 
 - (void)radiusChanged
 {
+    self.radiusField.hidden = (self.radiusControl.selectedSegmentIndex != 3);
+    if (!self.radiusField.hidden) [self.radiusField becomeFirstResponder];
+    self.batchLocation = nil;
+    [self updateLocationLabel];
+}
+
+- (void)radiusTextChanged
+{
     self.batchLocation = nil;
     [self updateLocationLabel];
 }
@@ -468,7 +483,12 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
         case 0: return 100;
         case 1: return 500;
         case 2: return 1000;
-        default: return 5000;
+        default: {
+            // 自定义：手输米数，留空或非法时按 500
+            double typed = self.radiusField.text.doubleValue;
+            if (!(typed > 0)) return 500;
+            return MIN(MAX(typed, 10.0), 50000.0);
+        }
     }
 }
 
@@ -513,16 +533,6 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     }
 }
 
-- (CGFloat)enhanceScale
-{
-    switch (self.enhanceControl.selectedSegmentIndex) {
-        case 1: return 2.0;
-        case 2: return 3.0;
-        case 3: return 4.0;
-        default: return 0.0;
-    }
-}
-
 #pragma mark - run
 
 - (void)runTapped
@@ -543,7 +553,6 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
                                                                   : [NSDate date];
     EXWriteOptions options = [self writeOptions];
     EXOutputFormat format = [self format];
-    CGFloat scale = [self enhanceScale];
     BOOL customName = self.nameSwitch.isOn;
     NSString *baseName = [self.nameField.text stringByTrimmingCharactersInSet:
                                                     [NSCharacterSet whitespaceCharacterSet]];
@@ -558,22 +567,7 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
                 NSDate *date = [baseDate dateByAddingTimeInterval:(NSTimeInterval)i];
                 NSString *token = [[NSUUID UUID] UUIDString];
                 NSURL *working = src;
-                NSURL *enhanced = nil;
                 NSError *error = nil;
-                if (scale > 0.5) {
-                    enhanced = [NSURL fileURLWithPath:
-                        [NSTemporaryDirectory() stringByAppendingPathComponent:
-                                                      [NSString stringWithFormat:@"enh-%@.img", token]]];
-                    if ([EXEnhancer upscaleURL:working toURL:enhanced scale:scale
-                                  maxDimension:8192 error:&error]) {
-                        working = enhanced;
-                    } else {
-                        dispatch_async(dispatch_get_main_queue(), ^{
-                            self.statusLabel.text = [NSString stringWithFormat:@"增强失败：%@",
-                                                                               error.localizedDescription];
-                        });
-                    }
-                }
                 NSString *ext = format == EXOutputFormatHEIF ? @"heic"
                               : (format == EXOutputFormatJPEG ? @"jpg" : src.pathExtension);
                 NSURL *out = [NSURL fileURLWithPath:
@@ -609,7 +603,6 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
                 } else {
                     failed++;
                 }
-                if (enhanced) [[NSFileManager defaultManager] removeItemAtURL:enhanced error:NULL];
                 if (!ok) {
                     dispatch_async(dispatch_get_main_queue(), ^{
                         self.statusLabel.text = [NSString stringWithFormat:@"第 %lu 张失败：%@",
