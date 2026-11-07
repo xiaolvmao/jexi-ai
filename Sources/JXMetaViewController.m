@@ -19,7 +19,6 @@
 @property (nonatomic, strong) UIScrollView *scroll;
 @property (nonatomic, strong) UIStackView *stack;
 
-@property (nonatomic, strong) UISegmentedControl *modeControl;
 @property (nonatomic, strong) UISegmentedControl *modelControl;
 @property (nonatomic, strong) UILabel *modeNote;
 @property (nonatomic, strong) UILabel *deviceLabel;
@@ -74,7 +73,7 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
 - (void)viewDidLoad
 {
     [super viewDidLoad];
-    self.title = @"元数据与增强";
+    self.title = @"超分";
     self.view.backgroundColor = [UIColor colorWithRed:0.04 green:0.05 blue:0.07 alpha:1];
 
     self.scroll = [UIScrollView new];
@@ -104,7 +103,6 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     ]];
 
     [self buildUI];
-    [self modeChanged];
 
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(keyboardWillChange:)
@@ -248,19 +246,15 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     [self.pageControl addTarget:self action:@selector(pageChanged) forControlEvents:UIControlEventValueChanged];
     [self.stack addArrangedSubview:self.pageControl];
 
-    self.previewHint = [self caption:[NSString stringWithFormat:
-        @"已选 %lu 张，左右滑动查看，长按可删除。", (unsigned long)self.urls.count]];
+    self.previewHint = [self caption:@"长按预览可以删掉重新选。"];
     [self.stack addArrangedSubview:self.previewHint];
-    [self.stack addArrangedSubview:[self caption:@"批量处理：同一批共用一个位置，每张的时间各不相同。原图不动，结果另存为新照片。"]];
+    [self.stack addArrangedSubview:[self caption:@"原图不动，结果另存为新照片。"]];
 
-    // 处理方式：AI 超分还是只改元数据
-    [self.stack addArrangedSubview:[self sectionTitle:@"处理方式"]];
-    self.modeControl = [self segments:@[ @"AI 超分", @"仅改元数据" ] selected:0];
-    [self.modeControl addTarget:self action:@selector(modeChanged) forControlEvents:UIControlEventValueChanged];
-    [self.stack addArrangedSubview:self.modeControl];
+    // 模型
+    [self.stack addArrangedSubview:[self sectionTitle:@"模型"]];
     self.modelControl = [self segments:@[ @"Real-ESRGAN 4×", @"快速" ] selected:0];
     [self.stack addArrangedSubview:self.modelControl];
-    self.modeNote = [self caption:@"AI 超分只处理第 1 张，输出长边上限 4096；结果按下面的设置写入元数据。"];
+    self.modeNote = [self caption:@"输出长边上限 4096；结果按下面的设置写入元数据。"];
     [self.stack addArrangedSubview:self.modeNote];
 
     // 设备信息
@@ -346,7 +340,7 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     [self.nameSwitch addTarget:self action:@selector(nameSwitchChanged) forControlEvents:UIControlEventValueChanged];
 
     // 运行
-    self.runButton = [self pill:@"写入并保存到相册" filled:YES];
+    self.runButton = [self pill:@"超分并保存到相册" filled:YES];
     [self.runButton addTarget:self action:@selector(runTapped) forControlEvents:UIControlEventTouchUpInside];
     [self.stack addArrangedSubview:self.runButton];
 
@@ -435,15 +429,6 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
                                      (unsigned long)self.urls.count]
         : @"照片已全部移除，返回上一页重新选。";
     self.runButton.enabled = self.urls.count > 0;
-}
-
-- (void)modeChanged
-{
-    BOOL ai = (self.modeControl.selectedSegmentIndex == 0);
-    self.modelControl.hidden = !ai;
-    self.modeNote.hidden = !ai;
-    [self.runButton setTitle:ai ? @"超分并保存到相册" : @"写入并保存到相册"
-                   forState:UIControlStateNormal];
 }
 
 #pragma mark - options
@@ -628,100 +613,7 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
         [self alert:@"还没有定位" message:@"先允许定位，或者把位置改成「不改」。"];
         return;
     }
-    if (self.modeControl.selectedSegmentIndex == 0) {
-        [self runAI];
-        return;
-    }
-    self.running = YES;
-    self.runButton.enabled = NO;
-    self.progressView.hidden = NO;
-    self.progressView.progress = 0;
-    self.statusLabel.text = @"准备中…";
-
-    CLLocation *location = [self effectiveLocation];
-    NSDate *baseDate = self.timeControl.selectedSegmentIndex == 2 ? self.datePicker.date
-                                                                  : [NSDate date];
-    EXWriteOptions options = [self writeOptions];
-    EXOutputFormat format = [self format];
-    BOOL customName = self.nameSwitch.isOn;
-    NSString *baseName = [self.nameField.text stringByTrimmingCharactersInSet:
-                                                    [NSCharacterSet whitespaceCharacterSet]];
-    NSArray<NSURL *> *urls = self.urls;
-
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSUInteger total = urls.count;
-        NSUInteger done = 0, failed = 0;
-        for (NSUInteger i = 0; i < total; i++) {
-            @autoreleasepool {
-                NSURL *src = urls[i];
-                NSDate *date = [baseDate dateByAddingTimeInterval:(NSTimeInterval)i];
-                NSString *token = [[NSUUID UUID] UUIDString];
-                NSURL *working = src;
-                NSError *error = nil;
-                NSString *ext = format == EXOutputFormatHEIF ? @"heic"
-                              : (format == EXOutputFormatJPEG ? @"jpg" : src.pathExtension);
-                NSURL *out = [NSURL fileURLWithPath:
-                    [NSTemporaryDirectory() stringByAppendingPathComponent:
-                                                  [NSString stringWithFormat:@"out-%@.%@", token, ext]]];
-                BOOL ok = [EXMetadata writeSourceURL:working
-                                       toDestination:out
-                                             options:options
-                                            location:location
-                                                date:date
-                                              format:format
-                                               error:&error];
-                if (ok) {
-                    NSString *filename = nil;
-                    if (customName && baseName.length) {
-                        filename = total > 1
-                            ? [NSString stringWithFormat:@"%@-%lu.%@", baseName, (unsigned long)i + 1, ext]
-                            : [NSString stringWithFormat:@"%@.%@", baseName, ext];
-                    } else {
-                        filename = JXHashedName(src, ext);
-                    }
-                    dispatch_semaphore_t gate = dispatch_semaphore_create(0);
-                    __block BOOL saved = NO;
-                    __block NSError *saveError = nil;
-                    JXSaveFileToPhotoLibrary(out, filename, ^(BOOL success, NSError *err) {
-                        saved = success;
-                        saveError = err;
-                        dispatch_semaphore_signal(gate);
-                    });
-                    dispatch_semaphore_wait(gate, dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC));
-                    if (saved) done++; else { failed++; error = saveError; }
-                    [[NSFileManager defaultManager] removeItemAtURL:out error:NULL];
-                } else {
-                    failed++;
-                }
-                if (!ok) {
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        self.statusLabel.text = [NSString stringWithFormat:@"第 %lu 张失败：%@",
-                                                                           (unsigned long)i + 1,
-                                                                           error.localizedDescription];
-                    });
-                }
-                NSUInteger finished = i + 1;
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    self.progressView.progress = (float)finished / (float)total;
-                    self.statusLabel.text = [NSString stringWithFormat:@"正在处理 %lu/%lu…",
-                                                                       (unsigned long)finished,
-                                                                       (unsigned long)total];
-                });
-            }
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.running = NO;
-            self.runButton.enabled = YES;
-            self.progressView.hidden = YES;
-            if (failed == 0) {
-                self.statusLabel.text = [NSString stringWithFormat:
-                    @"已保存 %lu 张新照片到相册，原图未改动。", (unsigned long)done];
-            } else {
-                self.statusLabel.text = [NSString stringWithFormat:
-                    @"完成 %lu 张，失败 %lu 张。", (unsigned long)done, (unsigned long)failed];
-            }
-        });
-    });
+    [self runAI];
 }
 
 #pragma mark - AI 超分
