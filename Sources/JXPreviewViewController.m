@@ -11,6 +11,7 @@
 @property (nonatomic, strong) UIImage *originalImage;
 @property (nonatomic, strong) NSDictionary *properties;
 @property (nonatomic, assign) BOOL prescaled;
+@property (nonatomic, assign) BOOL alreadySaved;
 @property (nonatomic, strong) UIScrollView *scrollView;
 @property (nonatomic, strong) UIImageView *imageView;
 @property (nonatomic, strong) UISegmentedControl *compareControl;
@@ -26,12 +27,26 @@
                          properties:(NSDictionary *)properties
                           prescaled:(BOOL)prescaled
 {
+    return [self initWithResultImage:result
+                       originalImage:original
+                          properties:properties
+                           prescaled:prescaled
+                               saved:NO];
+}
+
+- (instancetype)initWithResultImage:(UIImage *)result
+                      originalImage:(UIImage *)original
+                         properties:(NSDictionary *)properties
+                          prescaled:(BOOL)prescaled
+                              saved:(BOOL)saved
+{
     self = [super initWithNibName:nil bundle:nil];
     if (self) {
         _resultImage = result;
         _originalImage = original;
         _properties = properties;
         _prescaled = prescaled;
+        _alreadySaved = saved;
     }
     return self;
 }
@@ -105,6 +120,12 @@
     ]];
 
     [self updateInfo];
+
+    if (self.alreadySaved) {
+        self.saveButton.enabled = NO;
+        self.saveButton.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
+        [self.saveButton setTitle:@"已保存到相册" forState:UIControlStateNormal];
+    }
 }
 
 - (void)viewDidLayoutSubviews

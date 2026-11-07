@@ -9,5 +9,6 @@
 - (instancetype)initWithResultImage:(UIImage *)result
                       originalImage:(UIImage *)original
                          properties:(NSDictionary *)properties
-                          prescaled:(BOOL)prescaled;
+                          prescaled:(BOOL)prescaled
+                              saved:(BOOL)saved;
 @end

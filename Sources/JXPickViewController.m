@@ -4,7 +4,6 @@
 //
 
 #import "JXPickViewController.h"
-#import "JXRootViewController.h"
 #import "JXMetaViewController.h"
 #import "JXImageIO.h"
 #import <PhotosUI/PhotosUI.h>
@@ -42,7 +41,7 @@ typedef NS_ENUM(NSInteger, JXEntryMode) {
     [stack addArrangedSubview:title];
 
     UILabel *subtitle = [UILabel new];
-    subtitle.text = @"先选照片，再决定是 AI 超分还是改元数据";
+    subtitle.text = @"先选照片，再决定 AI 超分还是改元数据";
     subtitle.font = [UIFont systemFontOfSize:13];
     subtitle.textColor = [UIColor colorWithWhite:0.62 alpha:1];
     subtitle.numberOfLines = 0;
@@ -50,12 +49,8 @@ typedef NS_ENUM(NSInteger, JXEntryMode) {
     [stack setCustomSpacing:20 afterView:subtitle];
 
     [stack addArrangedSubview:[self cardWithIcon:@"wand.and.stars"
-                                           title:@"AI 超分"
-                                          detail:@"选一张照片，用 Core ML 放大 4 倍"
-                                            mode:JXEntryModeAI]];
-    [stack addArrangedSubview:[self cardWithIcon:@"camera.filters"
-                                           title:@"元数据与增强"
-                                          detail:@"批量写入机型、时间、定位，或放大锐化"
+                                           title:@"选择图片"
+                                          detail:@"选好照片后，可以 AI 超分，也可以只改元数据"
                                             mode:JXEntryModeMetadata]];
 
     self.hintLabel = [UILabel new];
@@ -141,11 +136,10 @@ typedef NS_ENUM(NSInteger, JXEntryMode) {
 
 - (void)cardTapped:(UITapGestureRecognizer *)tap
 {
-    JXEntryMode mode = (JXEntryMode)tap.view.tag;
-    self.mode = mode;
+    self.mode = JXEntryModeMetadata;
     PHPickerConfiguration *cfg = [[PHPickerConfiguration alloc] init];
     cfg.filter = [PHPickerFilter imagesFilter];
-    cfg.selectionLimit = (mode == JXEntryModeAI) ? 1 : 0;   // 0 = unlimited, for batch
+    cfg.selectionLimit = 0;   // 0 = unlimited; 选几张都行
     cfg.preferredAssetRepresentationMode = PHPickerConfigurationAssetRepresentationModeCurrent;
     PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:cfg];
     picker.delegate = self;
@@ -160,12 +154,7 @@ typedef NS_ENUM(NSInteger, JXEntryMode) {
     if (results.count == 0) return;
     self.hintLabel.text = @"正在读取照片…";
     [self.spinner startAnimating];
-
-    if (self.mode == JXEntryModeAI) {
-        [self loadSinglePhoto:results.firstObject];
-    } else {
-        [self loadBatch:results];
-    }
+    [self loadBatch:results];
 }
 
 - (NSString *)typeIdentifierFor:(NSItemProvider *)provider
@@ -177,48 +166,6 @@ typedef NS_ENUM(NSInteger, JXEntryMode) {
     return type;
 }
 
-- (void)loadSinglePhoto:(PHPickerResult *)result
-{
-    NSItemProvider *provider = result.itemProvider;
-    NSString *type = [self typeIdentifierFor:provider];
-    if (!type) {
-        [self finishWithMessage:@"读不到这张照片"];
-        return;
-    }
-    __weak typeof(self) weakSelf = self;
-    [provider loadFileRepresentationForTypeIdentifier:type
-                                    completionHandler:^(NSURL *url, NSError *error) {
-        NSData *data = url ? [NSData dataWithContentsOfURL:url options:0 error:NULL] : nil;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            typeof(self) self = weakSelf;
-            if (!self) return;
-            [self.spinner stopAnimating];
-            self.hintLabel.text = @"全部处理都在本机完成，照片不会上传。";
-            if (!data) {
-                [self alertWithTitle:@"读不到这张照片" message:error.localizedDescription];
-                return;
-            }
-            NSDictionary *properties = JXImagePropertiesFromData(data);
-            UIImage *image = [UIImage imageWithData:data scale:1.0];
-            JXNote(@"picked %lu bytes (%@), exif=%lu tiff=%lu gps=%lu, w=%@ h=%@ keys=%lu",
-                   (unsigned long)data.length, type,
-                   (unsigned long)[properties[(id)kCGImagePropertyExifDictionary] count],
-                   (unsigned long)[properties[(id)kCGImagePropertyTIFFDictionary] count],
-                   (unsigned long)[properties[(id)kCGImagePropertyGPSDictionary] count],
-                   properties[(id)kCGImagePropertyPixelWidth],
-                   properties[(id)kCGImagePropertyPixelHeight],
-                   (unsigned long)properties.count);
-            if (!image) {
-                [self alertWithTitle:@"解不开这张照片" message:@"换一张试试。"];
-                return;
-            }
-            JXRootViewController *work = [[JXRootViewController alloc] initWithImageData:data
-                                                                             properties:properties
-                                                                                preview:image];
-            [self.navigationController pushViewController:work animated:YES];
-        });
-    }];
-}
 
 - (void)loadBatch:(NSArray<PHPickerResult *> *)results
 {

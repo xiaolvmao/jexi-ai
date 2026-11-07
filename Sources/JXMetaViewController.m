@@ -4,6 +4,9 @@
 //
 
 #import "JXMetaViewController.h"
+#import "JXPreviewViewController.h"
+#import "JXUpscaler.h"
+#import "JXModelCatalog.h"
 #import "EXDevice.h"
 #import "EXMetadata.h"
 #import "JXImageIO.h"
@@ -16,6 +19,9 @@
 @property (nonatomic, strong) UIScrollView *scroll;
 @property (nonatomic, strong) UIStackView *stack;
 
+@property (nonatomic, strong) UISegmentedControl *modeControl;
+@property (nonatomic, strong) UISegmentedControl *modelControl;
+@property (nonatomic, strong) UILabel *modeNote;
 @property (nonatomic, strong) UILabel *deviceLabel;
 @property (nonatomic, strong) UISwitch *deviceSwitch;
 @property (nonatomic, strong) UISegmentedControl *timeControl;
@@ -98,6 +104,7 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
     ]];
 
     [self buildUI];
+    [self modeChanged];
 
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(keyboardWillChange:)
@@ -245,6 +252,16 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
         @"已选 %lu 张，左右滑动查看，长按可删除。", (unsigned long)self.urls.count]];
     [self.stack addArrangedSubview:self.previewHint];
     [self.stack addArrangedSubview:[self caption:@"批量处理：同一批共用一个位置，每张的时间各不相同。原图不动，结果另存为新照片。"]];
+
+    // 处理方式：AI 超分还是只改元数据
+    [self.stack addArrangedSubview:[self sectionTitle:@"处理方式"]];
+    self.modeControl = [self segments:@[ @"AI 超分", @"仅改元数据" ] selected:0];
+    [self.modeControl addTarget:self action:@selector(modeChanged) forControlEvents:UIControlEventValueChanged];
+    [self.stack addArrangedSubview:self.modeControl];
+    self.modelControl = [self segments:@[ @"Real-ESRGAN 4×", @"快速" ] selected:0];
+    [self.stack addArrangedSubview:self.modelControl];
+    self.modeNote = [self caption:@"AI 超分只处理第 1 张，输出长边上限 4096；结果按下面的设置写入元数据。"];
+    [self.stack addArrangedSubview:self.modeNote];
 
     // 设备信息
     [self.stack addArrangedSubview:[self sectionTitle:@"写入这台设备的真实数据"]];
@@ -418,6 +435,15 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
                                      (unsigned long)self.urls.count]
         : @"照片已全部移除，返回上一页重新选。";
     self.runButton.enabled = self.urls.count > 0;
+}
+
+- (void)modeChanged
+{
+    BOOL ai = (self.modeControl.selectedSegmentIndex == 0);
+    self.modelControl.hidden = !ai;
+    self.modeNote.hidden = !ai;
+    [self.runButton setTitle:ai ? @"超分并保存到相册" : @"写入并保存到相册"
+                   forState:UIControlStateNormal];
 }
 
 #pragma mark - options
@@ -602,6 +628,10 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
         [self alert:@"还没有定位" message:@"先允许定位，或者把位置改成「不改」。"];
         return;
     }
+    if (self.modeControl.selectedSegmentIndex == 0) {
+        [self runAI];
+        return;
+    }
     self.running = YES;
     self.runButton.enabled = NO;
     self.progressView.hidden = NO;
@@ -692,6 +722,156 @@ static NSString *JXHashedName(NSURL *url, NSString *ext)
             }
         });
     });
+}
+
+#pragma mark - AI 超分
+
+- (void)runAI
+{
+    NSURL *first = self.urls.firstObject;
+    NSData *data = [NSData dataWithContentsOfURL:first options:NSDataReadingMappedIfSafe error:NULL];
+    UIImage *original = data ? [UIImage imageWithData:data scale:1.0] : nil;
+    if (!data || !original) {
+        [self alert:@"读不到照片" message:@"重新选一张试试。"];
+        return;
+    }
+    self.running = YES;
+    self.runButton.enabled = NO;
+    self.progressView.hidden = NO;
+    self.progressView.progress = 0;
+    self.statusLabel.text = @"加载模型…";
+
+    JXModelKind kind = (self.modelControl.selectedSegmentIndex == 0) ? JXModelKindRealESRGAN
+                                                                   : JXModelKindFastSRGAN;
+    EXWriteOptions options = [self writeOptions];
+    EXOutputFormat format = [self format];
+    CLLocation *location = [self effectiveLocation];
+    NSDate *date = self.timeControl.selectedSegmentIndex == 2 ? self.datePicker.date : [NSDate date];
+    BOOL customName = self.nameSwitch.isOn;
+    NSString *baseName = [self.nameField.text stringByTrimmingCharactersInSet:
+                                                    [NSCharacterSet whitespaceCharacterSet]];
+    NSString *ext = format == EXOutputFormatHEIF ? @"heic"
+                  : (format == EXOutputFormatJPEG ? @"jpg" : first.pathExtension);
+    NSString *filename = (customName && baseName.length)
+        ? [NSString stringWithFormat:@"%@.%@", baseName, ext]
+        : JXHashedName(first, ext);
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        typeof(self) self = weakSelf;
+        if (!self) return;
+        NSError *error = nil;
+        JXSRModel *model = [[JXModelCatalog shared] modelForKind:kind error:&error];
+        if (!model) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self finishAIWithError:error saved:NO];
+            });
+            return;
+        }
+        CVPixelBufferRef source = JXCreatePixelBufferFromImageData(data, NULL, &error);
+        if (!source) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self finishAIWithError:error saved:NO];
+            });
+            return;
+        }
+        JXUpscaler *upscaler = [[JXUpscaler alloc] initWithModel:model];
+        upscaler.maxOutputEdge = 4096;
+        NSDate *started = [NSDate date];
+        CVPixelBufferRef output = [upscaler upscalePixelBuffer:source
+            progress:^(NSInteger done, NSInteger total, double perTile) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    double elapsed = -[started timeIntervalSinceNow];
+                    self.progressView.progress = (float)done / (float)MAX(total, 1);
+                    self.statusLabel.text = [NSString stringWithFormat:
+                        @"第 %ld/%ld 块 · 已用 %.0f 秒 · 预计还剩 %.0f 秒",
+                        (long)done, (long)total, elapsed, (total - done) * perTile];
+                });
+            }
+            canceled:^BOOL { return NO; }
+            error:&error];
+        CVPixelBufferRelease(source);
+        if (!output) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self finishAIWithError:error saved:NO];
+            });
+            return;
+        }
+        UIImage *result = JXImageFromPixelBuffer(output);
+        BOOL prescaled = upscaler.didPrescale;
+        CVPixelBufferRelease(output);
+        if (!result) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self finishAIWithError:[NSError errorWithDomain:@"jexi-ai" code:1 userInfo:@{
+                    NSLocalizedDescriptionKey : @"结果图创建失败"
+                }] saved:NO];
+            });
+            return;
+        }
+
+        // 先把像素写成临时文件，再让 EXMetadata 按选项重写元数据与格式
+        NSString *token = [[NSUUID UUID] UUIDString];
+        NSString *tmp = NSTemporaryDirectory();
+        NSURL *raw = [NSURL fileURLWithPath:
+            [tmp stringByAppendingPathComponent:[NSString stringWithFormat:@"ai-%@.jpg", token]]];
+        NSURL *final = [NSURL fileURLWithPath:
+            [tmp stringByAppendingPathComponent:[NSString stringWithFormat:@"out-%@.%@", token, ext]]];
+        BOOL wrote = [UIImageJPEGRepresentation(result, 0.95) writeToURL:raw atomically:YES];
+        BOOL ok = wrote && [EXMetadata writeSourceURL:raw
+                                        toDestination:final
+                                              options:options
+                                             location:location
+                                                 date:date
+                                               format:format
+                                                error:&error];
+        [[NSFileManager defaultManager] removeItemAtURL:raw error:NULL];
+        if (!ok) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self finishAIWithError:error ?: [NSError errorWithDomain:@"jexi-ai" code:2
+                                                                    userInfo:@{
+                                    NSLocalizedDescriptionKey : @"写入失败"}] saved:NO];
+            });
+            return;
+        }
+        NSData *finalData = [NSData dataWithContentsOfURL:final];
+        UIImage *finalImage = finalData ? [UIImage imageWithData:finalData scale:1.0] : nil;
+        NSDictionary *finalProperties = JXImagePropertiesFromData(finalData);
+        if (!finalImage) {
+            [[NSFileManager defaultManager] removeItemAtURL:final error:NULL];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self finishAIWithError:[NSError errorWithDomain:@"jexi-ai" code:3 userInfo:@{
+                    NSLocalizedDescriptionKey : @"结果图读取失败"}] saved:NO];
+            });
+            return;
+        }
+        JXSaveFileToPhotoLibrary(final, filename, ^(BOOL success, NSError *saveError) {
+            [[NSFileManager defaultManager] removeItemAtURL:final error:NULL];
+            if (!success) {
+                [self finishAIWithError:saveError saved:NO];
+                return;
+            }
+            self.running = NO;
+            self.runButton.enabled = YES;
+            self.progressView.hidden = YES;
+            self.statusLabel.text = [NSString stringWithFormat:@"已保存 1 张新照片（%@）", filename];
+            JXPreviewViewController *vc =
+                [[JXPreviewViewController alloc] initWithResultImage:finalImage
+                                                       originalImage:original
+                                                          properties:finalProperties
+                                                           prescaled:prescaled
+                                                               saved:YES];
+            [self.navigationController pushViewController:vc animated:YES];
+        });
+    });
+}
+
+- (void)finishAIWithError:(NSError *)error saved:(BOOL)saved
+{
+    self.running = NO;
+    self.runButton.enabled = self.urls.count > 0;
+    self.progressView.hidden = YES;
+    self.statusLabel.text = @"";
+    [self alert:@"超分失败" message:error.localizedDescription ?: @"未知错误"];
 }
 
 - (void)alert:(NSString *)title message:(NSString *)message
