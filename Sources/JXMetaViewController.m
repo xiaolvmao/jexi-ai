@@ -4,7 +4,6 @@
 //
 
 #import "JXMetaViewController.h"
-#import "JXPreviewViewController.h"
 #import "JXUpscaler.h"
 #import "JXModelCatalog.h"
 #import "EXDevice.h"
@@ -648,9 +647,6 @@
         }
         NSUInteger total = urls.count;
         NSUInteger saved = 0, failed = 0;
-        UIImage *lastImage = nil, *lastOriginal = nil;
-        NSDictionary *lastProperties = nil;
-        BOOL lastPrescaled = NO;
 
         for (NSUInteger i = 0; i < total; i++) {
             @autoreleasepool {
@@ -662,7 +658,6 @@
                     failed++;
                     continue;
                 }
-                UIImage *original = [UIImage imageWithData:data scale:1.0];
                 CVPixelBufferRef input = JXCreatePixelBufferFromImageData(data, NULL, &error);
                 if (!input) {
                     failed++;
@@ -695,7 +690,6 @@
                     continue;
                 }
                 UIImage *result = JXImageFromPixelBuffer(output);
-                BOOL prescaled = upscaler.didPrescale;
                 CVPixelBufferRelease(output);
                 if (!result) {
                     failed++;
@@ -757,10 +751,6 @@
                 [[NSFileManager defaultManager] removeItemAtURL:final error:NULL];
                 if (success) {
                     saved++;
-                    lastImage = finalImage;
-                    lastOriginal = original;
-                    lastProperties = JXImagePropertiesFromData(finalData);
-                    lastPrescaled = prescaled;
                 } else {
                     failed++;
                 }
@@ -782,17 +772,11 @@
                                                                    (unsigned long)saved,
                                                                    (unsigned long)failed];
             }
-            if (saved == 1 && lastImage) {
-                JXPreviewViewController *vc =
-                    [[JXPreviewViewController alloc] initWithResultImage:lastImage
-                                                           originalImage:lastOriginal
-                                                              properties:lastProperties
-                                                               prescaled:lastPrescaled
-                                                                   saved:YES];
-                [self.navigationController pushViewController:vc animated:YES];
-            } else if (saved > 1) {
-                [self showToast:[NSString stringWithFormat:
-                    @"已保存 %lu 张新照片到相册", (unsigned long)saved]];
+            if (saved > 0) {
+                [self showToast:(saved == 1)
+                    ? @"已保存 1 张新照片到相册"
+                    : [NSString stringWithFormat:@"已保存 %lu 张新照片到相册",
+                                                 (unsigned long)saved]];
             }
         });
     });
