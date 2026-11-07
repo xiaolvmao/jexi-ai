@@ -107,6 +107,21 @@ Sources/JXUpscaler.{h,m}        分块推理内核
   显示「原图过大，已按 4096 长边上限处理」。
 - 编译好的模型缓存在 `Library/Caches/compiled/`，省掉每次启动重编译。
 
+## 从 jexi（原 Melon 项目）迁移过来的功能
+
+引擎是原样搬过来的三个文件，界面按 jexi-ai 的风格重写：
+
+- `Sources/EXDevice.{h,m}` —— sysctl 读 `hw.machine` / `kern.osversion`，映射到市场名，给出镜头与曝光参数区间。
+- `Sources/EXMetadata.{h,m}` —— 像素原样搬运、按选项重写 EXIF/TIFF/GPS，换格式时重新编码；写入时清空
+  `ImageDescription` / `UserComment` / IPTC 说明字段。
+- `Sources/EXEnhancer.{h,m}` —— Core Image Lanczos 放大 + Unsharp Mask，长边 8192 上限。
+
+`Sources/JXMetaViewController` 把它们组合成批量页：分页预览（左右滑动、长按删除）、写入机型/系统/镜头曝光、
+时间（不改 / 现在 / 指定）、位置（抹掉 / 当前定位 / 附近随机 + 半径 + 换一个）、输出格式（原格式 / JPEG / HEIF）、
+文件名（自定义，留空则 `IMG_` + 内容 SHA-256 前 8 位）、Lanczos 2×/3×/4× 增强，最后逐张写入并保存。
+
+第一页 `JXPickViewController` 两条入口：AI 超分（单张）和元数据与增强（多选）。
+
 ## 自测
 
 ```sh

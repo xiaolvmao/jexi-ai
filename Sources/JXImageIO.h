@@ -35,4 +35,11 @@ void JXSaveImageToPhotoLibrary(UIImage *image,
                                NSDictionary *_Nullable originalProperties,
                                void (^completion)(BOOL ok, NSError *_Nullable error));
 
+/// Adds an already written file (JPEG or HEIF) to the photo library as a new
+/// asset, with this filename.  Asks for add-only access first; completion runs
+/// on the main queue.
+void JXSaveFileToPhotoLibrary(NSURL *fileURL,
+                              NSString *_Nullable filename,
+                              void (^completion)(BOOL ok, NSError *_Nullable error));
+
 NS_ASSUME_NONNULL_END

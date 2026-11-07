@@ -42,7 +42,9 @@
     <key>MinimumOSVersion</key>
     <string>16.0</string>
     <key>NSPhotoLibraryAddUsageDescription</key>
-    <string>jexi-ai 需要把超分结果另存为新照片。原照片不会被修改。</string>
+    <string>jexi-ai 需要把处理结果另存为新照片。原照片不会被修改。</string>
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>jexi-ai 在把定位写入照片元数据时，需要读取一次你的当前位置。</string>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>jexi-ai 需要读取你选中的那张照片来做超分。</string>
     <key>UIApplicationSceneManifest</key>

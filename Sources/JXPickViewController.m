@@ -1,18 +1,24 @@
 //
 //  JXPickViewController.m
-//  jexi-ai — 第一页：从相册挑一张照片，然后进入功能页。
+//  jexi-ai — 第一页：选图。两条入口，AI 超分（单张）和元数据与增强（批量）。
 //
 
 #import "JXPickViewController.h"
 #import "JXRootViewController.h"
+#import "JXMetaViewController.h"
 #import "JXImageIO.h"
 #import <PhotosUI/PhotosUI.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
+typedef NS_ENUM(NSInteger, JXEntryMode) {
+    JXEntryModeAI = 0,
+    JXEntryModeMetadata = 1,
+};
+
 @interface JXPickViewController () <PHPickerViewControllerDelegate>
-@property (nonatomic, strong) UIView *card;
 @property (nonatomic, strong) UIActivityIndicatorView *spinner;
 @property (nonatomic, strong) UILabel *hintLabel;
+@property (nonatomic, assign) JXEntryMode mode;
 @end
 
 @implementation JXPickViewController
@@ -36,118 +42,150 @@
     [stack addArrangedSubview:title];
 
     UILabel *subtitle = [UILabel new];
-    subtitle.text = @"从相册挑一张照片，下一步再选模型和超分";
+    subtitle.text = @"先选照片，再决定是 AI 超分还是改元数据";
     subtitle.font = [UIFont systemFontOfSize:13];
     subtitle.textColor = [UIColor colorWithWhite:0.62 alpha:1];
     subtitle.numberOfLines = 0;
     [stack addArrangedSubview:subtitle];
-    [stack setCustomSpacing:22 afterView:subtitle];
+    [stack setCustomSpacing:20 afterView:subtitle];
 
-    // the whole card is the button: tapping anywhere opens the photo picker
-    self.card = [UIView new];
-    self.card.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
-    self.card.layer.cornerRadius = 22;
-    self.card.layer.borderWidth = 1;
-    self.card.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.10].CGColor;
-    self.card.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.card.heightAnchor constraintEqualToConstant:330].active = YES;
-    [stack addArrangedSubview:self.card];
+    [stack addArrangedSubview:[self cardWithIcon:@"wand.and.stars"
+                                           title:@"AI 超分"
+                                          detail:@"选一张照片，用 Core ML 放大 4 倍"
+                                            mode:JXEntryModeAI]];
+    [stack addArrangedSubview:[self cardWithIcon:@"camera.filters"
+                                           title:@"元数据与增强"
+                                          detail:@"批量写入机型、时间、定位，或放大锐化"
+                                            mode:JXEntryModeMetadata]];
 
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self
-                                                                         action:@selector(pickPhoto)];
-    [self.card addGestureRecognizer:tap];
+    self.hintLabel = [UILabel new];
+    self.hintLabel.text = @"全部处理都在本机完成，照片不会上传。";
+    self.hintLabel.font = [UIFont systemFontOfSize:12];
+    self.hintLabel.textColor = [UIColor colorWithWhite:0.42 alpha:1];
+    self.hintLabel.numberOfLines = 0;
+    [stack addArrangedSubview:self.hintLabel];
+
+    self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+    self.spinner.hidesWhenStopped = YES;
+    [stack addArrangedSubview:self.spinner];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:16],
+        [stack.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:20],
+        [stack.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-20],
+    ]];
+}
+
+- (UIView *)cardWithIcon:(NSString *)icon title:(NSString *)title detail:(NSString *)detail
+                    mode:(JXEntryMode)mode
+{
+    UIView *card = [UIView new];
+    card.backgroundColor = [UIColor colorWithWhite:1 alpha:0.06];
+    card.layer.cornerRadius = 20;
+    card.layer.borderWidth = 1;
+    card.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.10].CGColor;
+    card.translatesAutoresizingMaskIntoConstraints = NO;
 
     UIImageView *glyph = [UIImageView new];
     glyph.translatesAutoresizingMaskIntoConstraints = NO;
     glyph.tintColor = [UIColor colorWithRed:0.29 green:0.67 blue:1 alpha:1];
-    glyph.image = [UIImage systemImageNamed:@"photo.on.rectangle.angled"
+    glyph.image = [UIImage systemImageNamed:icon
                           withConfiguration:[UIImageSymbolConfiguration
-                                                configurationWithPointSize:64
-                                                                weight:UIImageSymbolWeightLight]];
+                                                configurationWithPointSize:26
+                                                                weight:UIImageSymbolWeightRegular]];
     glyph.contentMode = UIViewContentModeScaleAspectFit;
-    [self.card addSubview:glyph];
+    [card addSubview:glyph];
 
-    UILabel *pickLabel = [UILabel new];
-    pickLabel.text = @"点这里选一张照片";
-    pickLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
-    pickLabel.textColor = [UIColor colorWithWhite:0.95 alpha:1];
-    pickLabel.textAlignment = NSTextAlignmentCenter;
-    pickLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.card addSubview:pickLabel];
+    UILabel *name = [UILabel new];
+    name.text = title;
+    name.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    name.textColor = [UIColor whiteColor];
+    name.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:name];
 
-    self.hintLabel = [UILabel new];
-    self.hintLabel.text = @"支持 JPEG / HEIC / PNG，原图不会被修改";
-    self.hintLabel.font = [UIFont systemFontOfSize:12];
-    self.hintLabel.textColor = [UIColor colorWithWhite:0.5 alpha:1];
-    self.hintLabel.textAlignment = NSTextAlignmentCenter;
-    self.hintLabel.numberOfLines = 0;
-    self.hintLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.card addSubview:self.hintLabel];
+    UILabel *sub = [UILabel new];
+    sub.text = detail;
+    sub.font = [UIFont systemFontOfSize:12];
+    sub.textColor = [UIColor colorWithWhite:0.62 alpha:1];
+    sub.numberOfLines = 0;
+    sub.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:sub];
 
-    self.spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
-    self.spinner.hidesWhenStopped = YES;
-    self.spinner.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.card addSubview:self.spinner];
+    UIImageView *chevron = [UIImageView new];
+    chevron.image = [UIImage systemImageNamed:@"chevron.right"];
+    chevron.tintColor = [UIColor colorWithWhite:0.4 alpha:1];
+    chevron.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:chevron];
 
     [NSLayoutConstraint activateConstraints:@[
-        [stack.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor
-                                        constant:16],
-        [stack.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:20],
-        [stack.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-20],
-
-        [glyph.centerXAnchor constraintEqualToAnchor:self.card.centerXAnchor],
-        [glyph.centerYAnchor constraintEqualToAnchor:self.card.centerYAnchor constant:-34],
-        [glyph.widthAnchor constraintEqualToConstant:96],
-        [glyph.heightAnchor constraintEqualToConstant:96],
-
-        [pickLabel.topAnchor constraintEqualToAnchor:glyph.bottomAnchor constant:18],
-        [pickLabel.leadingAnchor constraintEqualToAnchor:self.card.leadingAnchor constant:16],
-        [pickLabel.trailingAnchor constraintEqualToAnchor:self.card.trailingAnchor constant:-16],
-
-        [self.hintLabel.topAnchor constraintEqualToAnchor:pickLabel.bottomAnchor constant:8],
-        [self.hintLabel.leadingAnchor constraintEqualToAnchor:self.card.leadingAnchor constant:16],
-        [self.hintLabel.trailingAnchor constraintEqualToAnchor:self.card.trailingAnchor constant:-16],
-
-        [self.spinner.centerXAnchor constraintEqualToAnchor:self.card.centerXAnchor],
-        [self.spinner.topAnchor constraintEqualToAnchor:self.hintLabel.bottomAnchor constant:12],
+        [card.heightAnchor constraintEqualToConstant:92],
+        [glyph.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:18],
+        [glyph.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
+        [glyph.widthAnchor constraintEqualToConstant:32],
+        [glyph.heightAnchor constraintEqualToConstant:32],
+        [name.leadingAnchor constraintEqualToAnchor:glyph.trailingAnchor constant:14],
+        [name.topAnchor constraintEqualToAnchor:card.topAnchor constant:22],
+        [name.trailingAnchor constraintLessThanOrEqualToAnchor:chevron.leadingAnchor constant:-8],
+        [sub.leadingAnchor constraintEqualToAnchor:name.leadingAnchor],
+        [sub.topAnchor constraintEqualToAnchor:name.bottomAnchor constant:4],
+        [sub.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-18],
+        [chevron.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-16],
+        [chevron.centerYAnchor constraintEqualToAnchor:card.centerYAnchor],
     ]];
 
-    UILabel *foot = [UILabel new];
-    foot.text = @"全部处理都在本机完成，照片不会上传。";
-    foot.font = [UIFont systemFontOfSize:12];
-    foot.textColor = [UIColor colorWithWhite:0.42 alpha:1];
-    foot.numberOfLines = 0;
-    [stack addArrangedSubview:foot];
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(cardTapped:)];
+    [card addGestureRecognizer:tap];
+    card.tag = mode;
+    return card;
 }
 
-- (void)pickPhoto
+- (void)cardTapped:(UITapGestureRecognizer *)tap
 {
+    JXEntryMode mode = (JXEntryMode)tap.view.tag;
+    self.mode = mode;
     PHPickerConfiguration *cfg = [[PHPickerConfiguration alloc] init];
     cfg.filter = [PHPickerFilter imagesFilter];
-    cfg.selectionLimit = 1;
+    cfg.selectionLimit = (mode == JXEntryModeAI) ? 1 : 0;   // 0 = unlimited, for batch
     cfg.preferredAssetRepresentationMode = PHPickerConfigurationAssetRepresentationModeCurrent;
     PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:cfg];
     picker.delegate = self;
     [self presentViewController:picker animated:YES completion:nil];
 }
 
+#pragma mark - picking
+
 - (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results
 {
     [picker dismissViewControllerAnimated:YES completion:nil];
     if (results.count == 0) return;
+    self.hintLabel.text = @"正在读取照片…";
+    [self.spinner startAnimating];
 
-    NSItemProvider *provider = results.firstObject.itemProvider;
+    if (self.mode == JXEntryModeAI) {
+        [self loadSinglePhoto:results.firstObject];
+    } else {
+        [self loadBatch:results];
+    }
+}
+
+- (NSString *)typeIdentifierFor:(NSItemProvider *)provider
+{
     NSString *type = UTTypeImage.identifier;
     if (![provider hasItemConformingToTypeIdentifier:type]) {
         type = provider.registeredTypeIdentifiers.firstObject;
     }
-    if (!type) return;
+    return type;
+}
 
-    self.hintLabel.text = @"正在读取这张照片…";
-    [self.spinner startAnimating];
+- (void)loadSinglePhoto:(PHPickerResult *)result
+{
+    NSItemProvider *provider = result.itemProvider;
+    NSString *type = [self typeIdentifierFor:provider];
+    if (!type) {
+        [self finishWithMessage:@"读不到这张照片"];
+        return;
+    }
     __weak typeof(self) weakSelf = self;
-    // loadFileRepresentation hands back the file the asset is stored as; the
-    // data representation can be a downscaled transcode.
     [provider loadFileRepresentationForTypeIdentifier:type
                                     completionHandler:^(NSURL *url, NSError *error) {
         NSData *data = url ? [NSData dataWithContentsOfURL:url options:0 error:NULL] : nil;
@@ -155,7 +193,7 @@
             typeof(self) self = weakSelf;
             if (!self) return;
             [self.spinner stopAnimating];
-            self.hintLabel.text = @"支持 JPEG / HEIC / PNG，原图不会被修改";
+            self.hintLabel.text = @"全部处理都在本机完成，照片不会上传。";
             if (!data) {
                 [self alertWithTitle:@"读不到这张照片" message:error.localizedDescription];
                 return;
@@ -174,13 +212,66 @@
                 [self alertWithTitle:@"解不开这张照片" message:@"换一张试试。"];
                 return;
             }
-            JXRootViewController *work =
-                [[JXRootViewController alloc] initWithImageData:data
-                                                     properties:properties
-                                                        preview:image];
+            JXRootViewController *work = [[JXRootViewController alloc] initWithImageData:data
+                                                                             properties:properties
+                                                                                preview:image];
             [self.navigationController pushViewController:work animated:YES];
         });
     }];
+}
+
+- (void)loadBatch:(NSArray<PHPickerResult *> *)results
+{
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSURL *dir = [NSURL fileURLWithPath:
+        [NSTemporaryDirectory() stringByAppendingPathComponent:@"picked"]];
+    [fm createDirectoryAtURL:dir withIntermediateDirectories:YES attributes:nil error:NULL];
+
+    dispatch_group_t group = dispatch_group_create();
+    NSMutableArray<NSURL *> *copies = [NSMutableArray array];
+    NSLock *lock = [NSLock new];
+
+    for (PHPickerResult *result in results) {
+        NSItemProvider *provider = result.itemProvider;
+        NSString *type = [self typeIdentifierFor:provider];
+        if (!type) continue;
+        dispatch_group_enter(group);
+        [provider loadFileRepresentationForTypeIdentifier:type
+                                        completionHandler:^(NSURL *url, NSError *error) {
+            if (url) {
+                NSString *name = [NSString stringWithFormat:@"%@-%@", [[NSUUID UUID] UUIDString],
+                                                            url.lastPathComponent];
+                NSURL *dst = [dir URLByAppendingPathComponent:name];
+                if ([fm copyItemAtURL:url toURL:dst error:NULL]) {
+                    [lock lock];
+                    [copies addObject:dst];
+                    [lock unlock];
+                }
+            }
+            dispatch_group_leave(group);
+        }];
+    }
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        typeof(self) self = weakSelf;
+        if (!self) return;
+        [self.spinner stopAnimating];
+        self.hintLabel.text = @"全部处理都在本机完成，照片不会上传。";
+        if (copies.count == 0) {
+            [self alertWithTitle:@"没有读到照片" message:@"重新选一次试试。"];
+            return;
+        }
+        JXMetaViewController *vc = [[JXMetaViewController alloc] initWithFileURLs:copies];
+        [self.navigationController pushViewController:vc animated:YES];
+    });
+}
+
+- (void)finishWithMessage:(NSString *)message
+{
+    [self.spinner stopAnimating];
+    self.hintLabel.text = @"全部处理都在本机完成，照片不会上传。";
+    [self alertWithTitle:@"选图失败" message:message];
 }
 
 - (void)alertWithTitle:(NSString *)title message:(NSString *)message

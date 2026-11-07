@@ -42,7 +42,8 @@ CFLAGS="${CFLAGS} -DAPELIN_PACKAGE_ID=\"${PACKAGE_ID}\" -DAPELIN_BUILD_ID=\"${AP
 
 FRAMEWORKS="-framework UIKit -framework Foundation -framework CoreML -framework CoreVideo \
 -framework CoreImage -framework CoreGraphics -framework ImageIO -framework Photos \
--framework PhotosUI -framework UniformTypeIdentifiers -framework Accelerate"
+-framework PhotosUI -framework UniformTypeIdentifiers -framework Accelerate \
+-framework CoreLocation"
 
 build_arch() { # $1 arch, $2 output
     clang -arch "$1" ${CFLAGS} -o "$2" Sources/*.m ${FRAMEWORKS}

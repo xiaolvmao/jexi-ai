@@ -193,6 +193,30 @@ static BOOL JXWriteJPEG(UIImage *image, NSDictionary *originalProperties, NSStri
     return ok;
 }
 
+void JXSaveFileToPhotoLibrary(NSURL *fileURL, NSString *filename,
+                              void (^completion)(BOOL, NSError *))
+{
+    [PHPhotoLibrary requestAuthorizationForAccessLevel:PHAccessLevelAddOnly
+                                               handler:^(PHAuthorizationStatus status) {
+        if (status != PHAuthorizationStatusAuthorized &&
+            status != PHAuthorizationStatusLimited) {
+            NSError *err = JXIOError(@"没有相册写入权限。设置 ▸ 隐私与安全性 ▸ 照片 里允许 jexi-ai 添加照片。");
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(NO, err); });
+            return;
+        }
+        [[PHPhotoLibrary sharedPhotoLibrary] performChanges:^{
+            PHAssetCreationRequest *req = [PHAssetCreationRequest creationRequestForAsset];
+            PHAssetResourceCreationOptions *opts = [PHAssetResourceCreationOptions new];
+            if (filename.length) opts.originalFilename = filename;
+            [req addResourceWithType:PHAssetResourceTypePhoto fileURL:fileURL options:opts];
+        } completionHandler:^(BOOL success, NSError *error) {
+            NSError *out = error;
+            if (!success && !out) out = JXIOError(@"保存到相册失败");
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(success, out); });
+        }];
+    }];
+}
+
 void JXSaveImageToPhotoLibrary(UIImage *image, NSDictionary *originalProperties,
                                void (^completion)(BOOL, NSError *))
 {
