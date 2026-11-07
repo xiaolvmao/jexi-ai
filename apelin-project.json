@@ -4,5 +4,10 @@
   "kind": "workspace",
   "buildSystem": "external",
   "displayName": "jexi-ai",
-  "autoName": false
+  "autoName": false,
+  "external": {
+    "script": "apelin/build.sh",
+    "interpreter": "sh",
+    "arguments": []
+  }
 }

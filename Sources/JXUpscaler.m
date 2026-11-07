@@ -73,8 +73,33 @@ CVPixelBufferRef JXRescaleBuffer(CVPixelBufferRef source, size_t width, size_t h
 
 + (instancetype)modelWithContentsOfURL:(NSURL *)url error:(NSError **)error
 {
+    return [self modelWithContentsOfURL:url cacheDirectory:nil error:error];
+}
+
++ (instancetype)modelWithContentsOfURL:(NSURL *)url
+                       cacheDirectory:(NSURL *)cacheDirectory
+                                error:(NSError **)error
+{
     NSError *err = nil;
-    NSURL *compiled = [MLModel compileModelAtURL:url error:&err];
+    NSURL *compiled = nil;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (cacheDirectory) {
+        [fm createDirectoryAtURL:cacheDirectory withIntermediateDirectories:YES attributes:nil error:NULL];
+        NSString *name = url.lastPathComponent.stringByDeletingPathExtension;
+        NSURL *cached = [cacheDirectory URLByAppendingPathComponent:
+                                             [name stringByAppendingPathExtension:@"mlmodelc"]];
+        if ([fm fileExistsAtPath:cached.path]) {
+            compiled = cached;
+        } else {
+            NSURL *fresh = [MLModel compileModelAtURL:url error:&err];
+            if (fresh) {
+                if (![fm copyItemAtURL:fresh toURL:cached error:NULL]) compiled = fresh;
+                else compiled = cached;
+            }
+        }
+    } else {
+        compiled = [MLModel compileModelAtURL:url error:&err];
+    }
     if (!compiled) {
         if (error) *error = JXError(JXUpscalerErrorBadModel,
                                     [NSString stringWithFormat:@"compile failed: %@",

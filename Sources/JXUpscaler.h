@@ -29,6 +29,12 @@ typedef NS_ENUM(NSInteger, JXUpscalerError) {
 /// Compiles (MLModel.compileModelAtURL) and loads the model at url.
 + (nullable instancetype)modelWithContentsOfURL:(NSURL *)url error:(NSError **)error;
 
+/// Same, but keeps the compiled .mlmodelc in `cacheDirectory` so the next launch
+/// skips compilation (a 67 MB model costs a second or so each time otherwise).
++ (nullable instancetype)modelWithContentsOfURL:(NSURL *)url
+                                cacheDirectory:(nullable NSURL *)cacheDirectory
+                                         error:(NSError **)error;
+
 @property (nonatomic, readonly) NSInteger inputTileSize;  // square, from the image constraint
 @property (nonatomic, readonly) NSInteger scale;          // output / input
 @property (nonatomic, readonly, copy) NSString *inputName;

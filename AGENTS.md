@@ -57,6 +57,55 @@ vroot 化的，工具用它拼出来的路径打不开；用 `$APELIN_PROJECT_RO
 - 实测：Real-ESRGAN 1024×768 → 4096×3072 用 16.3 s / 6 块；
   3000×2000 → 4096×2732 用 14.3 s，峰值内存 +43 MB。Fast-SRGAN 同一张 0.9 s。
 
+## 标识符（永久，不要再改）
+
+- bundle id / 包 id：`com.liu.jexiai`
+- 可执行文件：`JexiAI`；显示名：`jexi-ai`
+- 版本：`0.1.0`（`apelin/build.sh` 里的 `VERSION`）
+- App 装到：`@PREFIX@/Applications/JexiAI.app`
+
+## 构建与安装
+
+```sh
+# 图标（换设计后重跑，产物进 Resources/）
+cd Tools && clang -arch arm64e -fobjc-arc -O2 -o icongen icongen.m \
+  -framework Foundation -framework CoreGraphics -framework CoreText -framework ImageIO \
+  && ldid -STool.entitlements icongen && cd .. && ./Tools/icongen Resources
+```
+
+`apelin/build.sh`（`apelin_project_build` 运行它）：`clang Sources/*.m` →
+`ldid -Sapelin/App.entitlements` → 把 `Resources/Info.plist`、图标、`LICENSES.txt`、
+两个 `.mlmodel` 拷进 `.app` → `dpkg-deb` 出一个包。rootless 会同时编 arm64/arm64e 再 lipo。
+
+`APELIN_PREFIX` 在 roothide 下是**空字符串且可能未导出**，脚本里用 `${APELIN_PREFIX-}`
+初始化，路径写成 `${stage}${APELIN_PREFIX}/Applications/...`，不能用 `${APELIN_PREFIX:?}`。
+
+之后 `apelin_package_install` 安装。装完图标不一定立刻出现在桌面，需要等 SpringBoard 刷新；
+App 重装后要先 `icli app kill --force com.liu.jexiai` 再启动，否则跑的还是旧二进制。
+
+## App 结构
+
+```
+Sources/main.m                  入口
+Sources/JXAppDelegate.{h,m}     窗口；进后台时释放模型，归还 ANE/GPU 工作集
+Sources/JXRootViewController    选照片(PHPicker)/选模型/进度/取消，推预览
+Sources/JXPreviewViewController 结果与原图对比、缩放、保存
+Sources/JXModelCatalog.{h,m}    内置模型、编译缓存、用户自备模型导入
+Sources/JXImageIO.{h,m}         解码+方向归一成 BGRA、BGRA→UIImage、带 EXIF 存相册
+Sources/JXUpscaler.{h,m}        分块推理内核
+```
+
+关键点：
+
+- PHPicker 用 `loadDataRepresentationForTypeIdentifier:` 拿原始数据；方向用 UIKit 画一遍烘平，
+  再拷进 BGRA 像素缓冲，所以推理输入端永远是正的。
+- 保存走 `PHAssetCreationRequest`：先用 `CGImageDestination` 写一张 JPEG，把原图的
+  EXIF/TIFF/GPS 拷过去，只改 `Orientation=1` 和像素宽高、删掉旧缩略图，然后作为**新照片**
+  加进相册，原图不动。需要 `NSPhotoLibraryAddUsageDescription` 和 add-only 授权。
+- 输出长边上限 4096；原图更大时 `JXUpscaler` 先 vImage 降采样，`didPrescale` 让界面上
+  显示「原图过大，已按 4096 长边上限处理」。
+- 编译好的模型缓存在 `Library/Caches/compiled/`，省掉每次启动重编译。
+
 ## 自测
 
 ```sh

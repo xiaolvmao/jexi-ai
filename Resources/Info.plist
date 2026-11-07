@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh_CN</string>
+    <key>CFBundleDisplayName</key>
+    <string>jexi-ai</string>
+    <key>CFBundleExecutable</key>
+    <string>JexiAI</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.liu.jexiai</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>jexi-ai</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleIconFiles</key>
+    <array>
+        <string>AppIcon60x60</string>
+        <string>AppIcon76x76</string>
+    </array>
+    <key>CFBundleIcons</key>
+    <dict>
+        <key>CFBundlePrimaryIcon</key>
+        <dict>
+            <key>CFBundleIconFiles</key>
+            <array>
+                <string>AppIcon60x60</string>
+            </array>
+            <key>CFBundleIconName</key>
+            <string>AppIcon</string>
+        </dict>
+    </dict>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>MinimumOSVersion</key>
+    <string>16.0</string>
+    <key>NSPhotoLibraryAddUsageDescription</key>
+    <string>jexi-ai 需要把超分结果另存为新照片。原照片不会被修改。</string>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>jexi-ai 需要读取你选中的那张照片来做超分。</string>
+    <key>UIApplicationSceneManifest</key>
+    <dict>
+        <key>UIApplicationSupportsMultipleScenes</key>
+        <false/>
+    </dict>
+    <key>UILaunchScreen</key>
+    <dict>
+        <key>UIColorName</key>
+        <string></string>
+    </dict>
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+    </array>
+    <key>UIStatusBarStyle</key>
+    <string>UIStatusBarStyleLightContent</string>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+    <key>UIUserInterfaceStyle</key>
+    <string>Dark</string>
+    <key>UIDeviceFamily</key>
+    <array>
+        <integer>1</integer>
+    </array>
+</dict>
+</plist>
